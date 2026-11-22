@@ -1,0 +1,81 @@
+{
+  "classification_taxonomy": {
+    "note": "The initial taxonomy seed remains unapproved per PP-005 and AI_SPEC v1.0; PRD family concepts here are scenario truth, not classifier labels or codes.",
+    "status": "not_assigned"
+  },
+  "coverage_truth": [
+    {
+      "declared_coverage_truth": "COMPLETE_FOR_FIXTURE",
+      "event_time_end_exclusive_utc": "2025-02-05T00:00:00Z",
+      "event_time_start_utc": "2025-01-01T00:00:00Z",
+      "policy_note": "Not a DAI-06 sufficiency or detection-eligibility decision.",
+      "scope": "one synthetic retailer source feed; generated fixture truth only",
+      "source_feed_id": "synthetic-review-feed",
+      "source_type": "REVIEW",
+      "valid_utc_event_dates_observed": 35
+    },
+    {
+      "declared_coverage_truth": "COMPLETE_FOR_FIXTURE",
+      "event_time_end_exclusive_utc": "2025-02-05T00:00:00Z",
+      "event_time_start_utc": "2025-01-01T00:00:00Z",
+      "policy_note": "Not a DAI-06 sufficiency or detection-eligibility decision.",
+      "scope": "one synthetic retailer source feed; generated fixture truth only",
+      "source_feed_id": "synthetic-return-feed",
+      "source_type": "RETURN",
+      "valid_utc_event_dates_observed": 35
+    }
+  ],
+  "dataset_scope": "development-only synthetic source data",
+  "deterministic_seed": 20261122,
+  "event_time_days": 35,
+  "event_time_end_exclusive_utc": "2025-02-05T00:00:00Z",
+  "event_time_start_utc": "2025-01-01T00:00:00Z",
+  "files": {
+    "fixture_truth.jsonl": {
+      "sha256": "f6853317baf57b1eebb8dc2796b253a86205d1b5719aa67acea3eb55b9c25d59"
+    },
+    "returns.csv": {
+      "sha256": "c31fcc3cccde307ee2809551f7a175dd66100a84672557e7e2310d07be1ad3b3"
+    },
+    "reviews.csv": {
+      "sha256": "c38da8ace87c8d4015903fd83f5bca7954a65e679577aed4bb69230075fa8c00"
+    }
+  },
+  "generator": "productpulse.datasets.generate",
+  "generator_version": "1.0.0",
+  "holdout": {
+    "final_holdout_locked": false,
+    "membership": null,
+    "note": "This artifact is development data only; no final evaluation holdout is created or locked."
+  },
+  "manifest_version": 1,
+  "record_count": 10000,
+  "source_counts": {
+    "RETURN": 5000,
+    "REVIEW": 5000
+  },
+  "source_text_provenance": "deterministic built-in templates; no customer or public-source text",
+  "truth_summary": {
+    "defect_family_concept_counts": {
+      "finish": 500,
+      "material": 500,
+      "packaging": 500,
+      "sizing/fit": 500,
+      "stitching": 500,
+      "zippers": 500
+    },
+    "fixture_truth_kind_counts": {
+      "AMBIGUOUS": 500,
+      "DATA_QUALITY_FAILURE": 500,
+      "LATE_ARRIVAL": 500,
+      "NON_DEFECT": 1000,
+      "NORMAL": 4500,
+      "PLANTED_DEFECT": 3000
+    },
+    "linkage_pending_fixture_count": 68,
+    "quality_fixture_counts": {
+      "INVALID_EVENT_TIME": 250,
+      "MISSING_TEXT": 250
+    }
+  }
+}

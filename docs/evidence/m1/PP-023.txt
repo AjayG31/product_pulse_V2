@@ -1,0 +1,41 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261122082725
+Username: COURSE5\Ajay.Gunjiker
+RunAs User: COURSE5\Ajay.Gunjiker
+Configuration Name: 
+Machine: ARLML918 (Microsoft Windows NT 10.0.26300.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Ticket PP-023
+Process ID: 29456
+PSVersion: 5.1.26100.10068
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.10068
+BuildVersion: 10.0.26100.10068
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+uv: uv 0.13.9 (6b2d39dcc 2026-11-17 x86_64-pc-windows-msvc)
+Node.js: 26.13.0
+npm: 11.20.0
+Python: Python 3.12.16
+
+===== PP-023 pytest =====
+
+
+===== PP-023 Bandit =====
+
+
+===== PP-023 pip-audit =====
+
+
+===== source snapshot identity =====
+Implementation source snapshot SHA-256: a3caaed860c642a1f1a83a96b1daef057311979cf0c12333c49cacd00228aee6
+Files included: 59
+
+Ticket PP-023 local checks passed.
+**********************
+Windows PowerShell transcript end
+End time: 20261122082733
+**********************

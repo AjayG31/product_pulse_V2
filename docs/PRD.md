@@ -2,12 +2,12 @@
 
 **Project:** Capstone Project 16 — Review and Return Reason Analyser  
 **Product:** ProductPulse — AI Product Quality Monitoring & Early Warning Platform  
-**Version:** 1.1 (consolidated recommended MVP specification)  
-**Status:** Recommended implementation baseline — pending product-owner sign-off on calibration-sensitive decisions  
-**Date:** 20 November 2026  
+**Version:** 1.7 (local automated verification and pre-merge evidence)
+**Status:** Recommended implementation baseline — local verification approach approved; calibration-sensitive decisions remain pending  
+**Date:** 22 November 2026  
 **Audience:** Product owners, developers, QA, design, and capstone reviewers
 
-> **Scope and decision status:** The capstone catalogue mandates AI classification, historical Batch API processing, near-real-time feedback processing, product/supplier/batch linkage, emerging-defect detection, dashboard drill-down, and measurable evaluation. Authentication, admin-only CSV ingestion, automated/manual emails, and incident management were established in project discussion. Version 1.1 integrates recommended product decisions from the MVP Decision Resolution review. These are **resolved for implementation planning**, not evidence of formal stakeholder approval. Detection thresholds, recurrence timing, notification routing, and quality gates remain provisional until product-owner sign-off and evaluation.
+> **Scope and decision status:** The capstone catalogue mandates AI classification, historical Batch API processing, near-real-time feedback processing, product/supplier/batch linkage, emerging-defect detection, dashboard drill-down, and measurable evaluation. Authentication, admin-only CSV ingestion, automated/manual emails, and incident management were established in project discussion. Version 1.1 integrates recommended product decisions from the MVP Decision Resolution review. These are **resolved for implementation planning**, not evidence of formal stakeholder approval. The 30-day recurrence rule is approved under PB-03 (20 November 2026); detection thresholds, notification routing, and quality gates remain provisional until product-owner sign-off and evaluation.
 
 ## 1. Executive summary
 
@@ -92,7 +92,7 @@ Retailers receive reviews and return explanations across multiple sources. Simpl
 | F13 | Warning lifecycle and audit trail | P0 | Admin/User |
 | F14 | Alert deduplication and notification cooldown | P0 | Backend |
 | F15 | Processing health, last-updated and failure indicators | P0 | Admin/All (summary) |
-| F16 | Evaluations, baseline comparison and CI merge gates | P0 | Engineering |
+| F16 | Evaluations, baseline comparison and local automated verification | P0 | Engineering |
 | F17 | Basic incident investigation notes | P0 | Admin/User |
 | F18 | Export incident / quality report | P1 | Admin/User |
 | F19 | Scheduled CSV ingestion from watched storage | P1 | Admin/Backend |
@@ -126,6 +126,8 @@ Admin signs in
 
 CSV uploads are **admin-initiated** in MVP; once uploaded, processing is automatic. A future connector can continuously feed the same ingestion API. No user needs to be logged in for analysis, detection or notifications to continue.
 
+At confirmation, the Admin explicitly selects an import processing mode for review/return feedback: historical imports use `HISTORICAL_BATCH` and automatically queue classification through the OpenAI Batch API; incremental imports use `INCREMENTAL_RESPONSES` and automatically queue classification through the Responses API. The mode is part of the confirmed import identity and retries preserve it. Product, supplier, and batch reference imports have no classification mode. Classification is queued automatically after newly accepted feedback is persisted; no second user action is required. Business Users cannot initiate or retry ingestion.
+
 ### 5.2 Business user journey
 
 ```text
@@ -142,7 +144,8 @@ Sign in -> Overview Dashboard -> Review KPI cards / warnings
 
 ```text
 Sign in -> Admin Console -> Upload reviews / returns CSV
-        -> Map / validate columns -> Confirm import
+        -> Map / validate columns -> Select historical or incremental mode
+        -> Confirm import
         -> Track job (queued / running / completed / partial / failed)
         -> Inspect rejected rows and retry corrected input
         -> Review ingestion health and OpenAI usage
@@ -153,7 +156,9 @@ Sign in -> Admin Console -> Upload reviews / returns CSV
 
 ### 6.1 Login
 
-- Email/password or a development authentication provider; passwords must never be stored in plaintext.
+- Use secure email/password authentication with server-side sessions. Store passwords using secure hashes; use session cookies with the `Secure` and `HttpOnly` attributes and appropriate CSRF protection. Support session expiry and logout invalidation.
+- Provision the first Admin through a protected setup command. Do not provide public self-registration or SSO. Admins create and deactivate application users.
+- Define exact session configuration and account recovery behavior in `SECURITY.md` before implementation.
 - Redirect to dashboard after successful login; admin can navigate to Admin Console.
 - Unauthorized and expired sessions are handled safely.
 - Navigation and server routes reflect role permissions.
@@ -212,7 +217,7 @@ Sign in -> Admin Console -> Upload reviews / returns CSV
 - Import confirmation, asynchronous job status, error log and retry mechanism.
 - Historical Batch API job tracking and near-real-time processing status.
 - Usage/cost and operational health summaries.
-- Admin-controlled versioned configuration for taxonomy, thresholds, approved internal/sandbox email recipient groups and notification cooldowns; show audit history for changes.
+- Admin-controlled versioned configuration for taxonomy, thresholds, and approved internal/sandbox email recipient groups; show audit history for changes. The MVP same-severity notification cooldown is fixed at 86,400 seconds and cannot be overridden by an Admin.
 
 ### 6.8 Manual Alert Composer
 
@@ -257,8 +262,10 @@ Sign in -> Admin Console -> Upload reviews / returns CSV
 
 - Accept **admin-only manual CSV uploads** after a preview and explicit confirmation. Maximum **20 MB and 50,000 rows per upload**; reject unsupported extensions, malformed CSV, invalid encoding, and structurally invalid files.
 - Preview accepted rows, rejected rows, missing keys, duplicate rows and changed-record conflicts. Valid rows may be imported while invalid rows are rejected; produce downloadable row-level reasons.
+- At confirmation, require an explicit processing mode for review/return imports: historical imports use `HISTORICAL_BATCH`; incremental imports use `INCREMENTAL_RESPONSES`. Reference-data imports have no classification mode. Newly accepted feedback is automatically queued through the selected OpenAI API after persistence. The mode is immutable for that import and retained on Admin retry; Business Users cannot upload, confirm, initiate, or retry ingestion.
 - Required record identity, product ID, event timestamp, and nonempty feedback text/reason must be valid. Supplier/batch references may be resolved from the record or reference mappings.
-- Retain otherwise valid records whose supplier or batch cannot be resolved, mark `LINKAGE_PENDING`, and exclude them from **supplier/batch-specific** incidents. Do not invent missing IDs. Admin reconciliation of mappings triggers recomputation of affected aggregates. Product-level monitoring may continue separately with a distinctly defined cluster key.
+- Retain otherwise valid records whose supplier or batch cannot be resolved, mark `LINKAGE_PENDING`, and exclude them from **supplier/batch-specific** incidents. When `product_id` is valid, include them in distinctly labelled product-level analytics. Do not invent missing IDs or generate product-only incidents or automatic notifications from unresolved-link records. Admin reconciliation of mappings triggers recomputation of affected detection results.
+- Product defect totals count distinct fully linked feedback records with a successfully validated `has_defect=true` result. Product-level records still marked `LINKAGE_PENDING` are excluded from that total and shown in a separately labelled pending count, including a separate pending-defect count where classification is complete. Return-record counts and known returned units remain separate measures; pending returns are labelled separately and do not imply a failure rate.
 - Enforce globally unique `(source_type, source_record_id)` within the synthetic retailer. Identical re-uploads are no-ops; a changed payload with an existing identity is a **conflict requiring admin review**, never a silent overwrite.
 - Preserve original source text and event time as immutable normal-workflow records. Store file hash, uploading actor, ingestion timestamp, job ID, accepted/rejected counts, linkage status and reconciliation audit trail.
 - Treat review/return event timestamps as **UTC event time** for detection windows; retain ingestion/processing times separately for delayed or late data.
@@ -294,7 +301,7 @@ Sign in -> Admin Console -> Upload reviews / returns CSV
 - No defect / non-actionable
 - Uncertain / needs review
 
-The taxonomy and normalized `specific_issue_code` dictionary must be versioned. One feedback record may have a primary and optional secondary issue labels. Deduplicate identical issue codes within the same record and cluster; do not count the same complaint twice in one cluster.
+The taxonomy and normalized `specific_issue_code` dictionary must be versioned. Each classification retains the taxonomy version used, and each versioned specific issue code maps to a stable logical defect identifier. Reuse that identifier across versions only when the defect meanings are semantically equivalent; a changed meaning receives a new identifier and is never automatically merged. One feedback record may have a primary and optional secondary issue labels. Deduplicate identical issue codes within the same record and cluster; do not count the same complaint twice in one cluster.
 
 ### 8.3 Classification output schema (illustrative)
 
@@ -317,11 +324,11 @@ The JSON is illustrative; implementation must add source type, schema version an
 ### 9.1 Counting, cluster identity and time windows
 
 - **Counting unit:** One distinct `(source_type, source_record_id)` with a successfully validated `has_defect=true` classification per cluster. One record may contribute to distinct issue clusters via secondary labels but may not count twice in the same cluster.
-- **Batch-specific cluster key:** `(product_id, supplier_id, batch_id, specific_issue_code)` with a normalized versioned issue code nested in its defect category. Batch-specific incidents require resolved product, supplier and batch keys. Product-level monitoring of unresolved linkage must use a separate, explicitly labelled key without fabricated identifiers.
+- **Batch-specific cluster key:** `(product_id, supplier_id, batch_id, logical_defect_id)`. Each taxonomy-versioned specific issue code maps explicitly to this stable identifier; semantically equivalent defects can share a cluster across versions, while changed meanings use a new identifier and remain separate. Batch-specific incidents require resolved product, supplier and batch keys. When product identity is valid, unresolved-link records may appear in distinctly labelled product-level analytics with `LINKAGE_PENDING`; they must not create product-only incidents or automatic notifications. Recompute affected detection results after Admin reconciliation.
 - **Time basis:** UTC event time. At evaluation instant `T`, count observed complaints in `[T−7 days,T)` and baseline complaints in `[T−35 days,T−7 days)`. Store evaluated instant, source IDs, counts, coverage, rule version and linkage status.
 - **Baseline:** `baseline_7d = baseline_28d_count / 4`; calculate `observed_7d / baseline_7d` only for a usable **nonzero** baseline. A usable baseline requires declared full 28-day historical event-time coverage, not simply a database with some older records.
 - If historical coverage is complete but prior count is **zero**, display `No prior observed complaints` and apply the count-only thresholds in Section 9.2. Never display an infinite multiplier.
-- If 28-day coverage is insufficient, display `Insufficient historical baseline`, retain trend evidence but suppress automatic warning emails. A provisional trend-only indicator may be shown; do not assign a validated alert severity from an unsupported ratio.
+- If 28-day coverage is insufficient, display `Insufficient historical baseline` and retain trend evidence, but do not create an automatic warning or send an automatic warning email. A provisional trend-only indicator may be shown; do not assign a validated alert severity from an unsupported ratio.
 - Recompute affected aggregates on new classifications, corrected linkages and late arrivals; run scheduled reconciliation to detect missed changes.
 
 ### 9.2 Configurable initial rules (provisional; not validated)
@@ -349,10 +356,10 @@ These are **MVP demo hypotheses**. Calibrate on development planted scenarios, f
 ### 9.4 Deduplication, cooldown and escalation
 
 - High and Critical events queue automatic emails to approved recipients. Medium incidents do not auto-email.
-- Enforce a **24-hour cooldown** for repeated same-severity automatic emails per incident; higher-severity escalation bypasses cooldown. Use durable outbox events and stable event IDs to prevent duplicate internal dispatch requests.
+- Enforce a fixed **24-hour (86,400-second) cooldown** for repeated same-severity automatic emails per incident; Admin configuration cannot override it. Higher-severity escalation bypasses cooldown. Use durable outbox events and stable event IDs to prevent duplicate internal dispatch requests.
 - Manual notification events are distinct from automated events and never change severity or block escalation.
 - Route by admin-approved product/category/supplier mapping, falling back to the configured internal quality-team sandbox inbox. If no approved route/fallback exists, do not send; surface an operational error.
-- Email provider acceptance is not proof of actual delivery, and exactly-once external delivery cannot be guaranteed unless the provider supports idempotency.
+- Email provider acceptance is not proof of actual delivery. Do not claim exactly-once external email delivery; provider-specific idempotency behavior remains for `ALERT_SPEC.md`.
 
 ## 10. Email notifications
 
@@ -435,7 +442,7 @@ All endpoints require validation, pagination where applicable, appropriate rate 
 - Enforce role permissions on all server routes and data access.
 - Validate uploaded files and limit file size, type and row count; protect against CSV injection on exports.
 - Test prompt injection in malicious review text and unauthorized requests to admin endpoints.
-- Use TLS for deployed services, parameterized queries, audit logging and least-privilege database credentials.
+- Use TLS for deployed services, parameterized queries, audit logging, and least-privilege filesystem permissions for the SQLite database file and its persistent storage.
 - Redact sensitive text in telemetry and traces; do not send API secrets to the model.
 
 ### 13.3 Reliability and operations
@@ -466,15 +473,16 @@ All endpoints require validation, pagination where applicable, appropriate rate 
 
 ### 14.1 Provisional release gates and reporting
 
-**Required automated MVP gates** (planning defaults; verify before approval):
+**Required automated MVP checks and pre-merge checklist** (planning defaults; verify before approval):
 
 - **100%** valid strict schemas for persisted, *completed* classifications; invalid/uncertain classifications are excluded and reported rather than silently treated as normal feedback.
 - **100%** correct source-reference integrity in the test fixtures, including no fabricated supplier/batch links.
 - **≥90%** recall of planted episodes in the locked held-out evaluation set. Report precision, false positives and missed episodes; this recall target is provisional and should be revisited if scenario count is too small.
 - **Zero** duplicate incidents in retry/idempotency tests, unauthorized Business User uploads, and unconfirmed manual emails.
-- CI blocks merges for reference-integrity failures, critical security/permission failures, planted-episode recall below the configured threshold or a known classification regression. Classification class-specific thresholds must be set from development evaluation and class prevalence before held-out testing; do not invent an unsupported macro-accuracy promise.
+- Run the repeatable local PowerShell verification suite on the exact revision proposed for merge. The documented pre-merge checklist must show passing results for all required checks and retain the commands, revision, results, and evidence. A failed required check prevents pre-merge approval until corrected and rerun.
+- Treat reference-integrity failures, critical security/permission failures, planted-episode recall below the configured threshold, and known classification regressions as blocking checklist failures. Classification class-specific thresholds must be set from development evaluation and class prevalence before held-out testing; do not invent an unsupported macro-accuracy promise. No quality threshold is promoted from provisional to approved by this change.
 
-Lock the held-out dataset **before** final tuning. Report results, not assumed attainment. Demonstrate a deliberate failing CI change and restoration of a passing build.
+Lock the held-out dataset **before** final tuning. Report results, not assumed attainment. Demonstrate a deliberately failing automated test followed by restoration to a passing state using the local verification process. Retain the failure and restoration commands, revision identifiers, results, and evidence. This demonstration is separate from deployment rollback evidence.
 
 **Other required capstone artifacts:** BRD with acceptance criteria, solution design, task plan, `AGENTS.md`, Codex review log, evaluation dataset and report, security triage, injection tests, non-production deployment, health checks, rollback demonstration, operating runbook, and 5–6-slide presentation with live demo.
 
@@ -483,13 +491,13 @@ Lock the held-out dataset **before** final tuning. Report results, not assumed a
 | ID | Given / When / Then |
 |---|---|
 | AC01 | Given a Business User session, when they request an admin upload endpoint, then the server returns 403 and no ingestion job is created. |
-| AC02 | Given an Admin session and valid reviews CSV, when uploaded, then a job ID is returned and accepted records are persisted once. |
-| AC03 | Given a CSV with valid and invalid rows, when Admin previews and confirms an import, then valid rows are accepted once and rejected rows produce downloadable reasons. |
-| AC04 | Given a duplicate upload or retry, when processed, then source records and incidents are not duplicated. |
+| AC02 | Given an Admin session and valid reviews CSV, when previewed and confirmed with an explicit processing mode, then a job ID is returned, accepted records are persisted once, and eligible new feedback is automatically queued through the selected classification API. |
+| AC03 | Given a CSV with valid and invalid rows, when Admin previews and confirms an import with the required feedback processing mode, then valid rows are accepted once and rejected rows produce downloadable reasons; reference-data imports do not require a mode. |
+| AC04 | Given a duplicate upload or Admin retry, when processed, then source records and incidents are not duplicated and the confirmed import processing mode is preserved. |
 | AC05 | Given valid feedback, when classification completes, then the result conforms to the strict schema and references the original feedback record. |
 | AC06 | Given feedback containing instructions to ignore rules, when classified, then the system treats it as data and does not execute the instructions. |
-| AC07 | Given historical feedback, when the Batch API job completes, then results are ingested, validated and included in analytics. |
-| AC08 | Given a newly imported record, when the near-real-time classification finishes, then affected dashboard aggregates refresh without a business user initiating analysis. |
+| AC07 | Given a historical review/return import confirmed with HISTORICAL_BATCH mode, when accepted feedback is persisted, then classification is automatically queued through the OpenAI Batch API and completed results are validated and included in analytics. |
+| AC08 | Given an incremental review/return import confirmed with INCREMENTAL_RESPONSES mode, when accepted feedback is persisted, then classification is automatically queued through the Responses API and affected dashboard aggregates refresh without a Business User initiating analysis. |
 | AC09 | Given a planted defect spike above the configured threshold, when the detection job runs, then a warning is created with reproducible counts and baseline evidence. |
 | AC10 | Given an active warning, when further matching feedback arrives, then the existing warning updates without duplicate same-severity emails inside cooldown. |
 | AC11 | Given a warning severity escalation, when the rule evaluates, then an escalation email is queued even during the standard cooldown. |
@@ -498,7 +506,7 @@ Lock the held-out dataset **before** final tuning. Report results, not assumed a
 | AC14 | Given a user who has not confirmed a manual alert, when they exit the composer, then no email is sent. |
 | AC15 | Given a warning in NEW state, when authorized users acknowledge, investigate and resolve it, then transitions and notes are recorded chronologically. |
 | AC16 | Given a failed or delayed ingestion pipeline, when a user opens the dashboard, then the system shows data freshness and a visible processing warning. |
-| AC17 | Given the held-out evaluation set, when CI runs, then quality metrics are calculated and configured regressions block merge. |
+| AC17 | Given the locked held-out evaluation set, when the repeatable local PowerShell evaluation checks run, then quality metrics are calculated and every configured regression is reported as a failed check. A revision is not eligible for pre-merge approval until all required local checks pass on that exact revision and the documented checklist and evidence are complete. |
 | AC18 | Given the deployed non-production application, when rollback is executed, then the previous healthy version is restored and verified by health checks. |
 | AC19 | Given structurally valid feedback with unresolved supplier/batch mapping, when ingested, then it is `LINKAGE_PENDING` with no batch-specific incident; when Admin corrects mapping, affected aggregates recompute. |
 | AC20 | Given complete 28-day baseline coverage with zero observed prior complaints, when 7-day counts cross a count-only threshold, then the corresponding incident is created without an infinity multiplier. |
@@ -507,19 +515,23 @@ Lock the held-out dataset **before** final tuning. Report results, not assumed a
 | AC23 | Given an existing source identity and different newly uploaded text, when an admin uploads it, then the system reports a conflict and does not overwrite the original. |
 | AC24 | Given pending or needs-review classifications, when complaint totals are shown, then those records are excluded from confirmed complaints and classification coverage exposes the incomplete processing. |
 
+AC17 evaluation results, local verification output, pre-merge checklist, and failure/restoration evidence, together with AC18 rollback/health-check results, are external engineering evidence. They are not runtime API workflows or endpoints.
+
 ## 16. Recommended implementation architecture
 
 **Frontend:** React + TypeScript, dashboard charting library; 30-second aggregate polling and explicit data-freshness states.  
 **Backend:** Python FastAPI with server-side RBAC and validation.  
-**Database:** PostgreSQL (source records, classifications, incidents, audit).  
-**Background jobs:** Durable queue/worker or database-backed job scheduler, periodic reconciliation and notification outbox.  
+**Database:** SQLite as the only primary relational database for source records, classifications, incidents, and audit; one persistent database file is shared by the API and worker.  
+**Background jobs:** One separately running worker processes SQLite-persisted durable job state and notification outbox, with periodic reconciliation.  
 **AI:** OpenAI Responses API for new records; Batch API for historical backlogs; strict structured outputs.  
 **Analytics:** SQL/Python deterministic aggregations and cluster rules.  
 **Notifications:** Approved internal/sandbox mailbox via a backend adapter and idempotent outbox; no supplier or production external delivery.  
-**CI/CD:** GitHub Actions or equivalent; unit, integration, security and evaluation gates.  
+**Local verification:** Repeatable PowerShell scripts run the approved unit, integration, security, and evaluation checks. Backend/API tests use pytest and FastAPI TestClient; frontend tests use Vitest and React Testing Library. Use a documented pre-merge checklist and retain evidence for the exact revision. Hosted CI merge gates and Playwright are not used.  
 **Deployment:** Non-production cloud environment with health checks, secrets, logs, usage metrics and rollback.
 
 **Important separation:** OpenAI classifies unstructured feedback; it does not calculate KPI totals, determine alert thresholds, authorize users or send emails directly. These responsibilities stay in tested backend services.
+
+**Implementation wording change (20 November 2026):** This v1.2 update replaces the prior database technology recommendation in §16 with the product owner's approved SQLite choice and specifies the approved single-worker, SQLite-persisted job/outbox approach. Section 13.2 expresses the existing least-privilege database-access security intent as filesystem permissions for the SQLite file and its storage. Product behavior, roles and permissions, P0 scope, acceptance criteria, performance targets, security intent, evaluation requirements, and the logical data model are unchanged. SQLite operating constraints are documented in `docs/TECH_STACK.md`; this PRD update does not approve an ORM or migration tool.
 
 ## 17. Suggested delivery phases
 
@@ -529,7 +541,7 @@ Lock the held-out dataset **before** final tuning. Report results, not assumed a
 4. **Detection:** Linkage reconciliation, 7-day/28-day baseline algorithm, zero/missing-history rules, planted clusters, incidents, 30-day recurrence.
 5. **Experience:** Dashboard, product detail, feedback explorer, warning drill-down and freshness.
 6. **Actioning:** Sandbox auto/manual emails, approved-recipient routing, cooldown, incident notes/status, recurrence and audit.
-7. **Hardening:** CI evaluation gate, load/security tests, deployment, rollback, runbook and live demo.
+7. **Hardening:** Local automated evaluation checks and pre-merge evidence, load/security tests, deployment, rollback, runbook and live demo.
 
 **Suggested 4-person ownership:** (1) ingestion/database; (2) OpenAI classification/evaluation; (3) detection/incidents/notifications; (4) frontend/auth/deployment. Everyone participates in review, security and the final defence.
 
@@ -542,11 +554,11 @@ Lock the held-out dataset **before** final tuning. Report results, not assumed a
 5. A warning appears and an automatic email is recorded in the sandbox mailbox.
 6. Business user logs in, opens the warning, reviews the original comments and calculation, acknowledges it and adds a note.
 7. Business user previews and confirms a manual email to an approved recipient; notification history updates.
-8. Team presents classification accuracy, lead-time improvement over sentiment baseline, cost per 1,000 reviews, CI gate, security checks and rollback.
+8. Team presents classification accuracy, lead-time improvement over sentiment baseline, cost per 1,000 reviews, local verification checklist and evidence, security checks and rollback.
 
 ## 19. Consolidated MVP decision register and sign-off boundary
 
-All entries below are **recommended defaults for the implementation baseline**, not previously authorized organizational policies.
+Entries below describe the recommended implementation baseline and retain the decision status shown in each row. D17's 30-day recurrence rule is approved under PB-03; the other listed defaults do not gain approval from this table.
 
 | ID | Topic | Resolution for MVP | Deferred / validation |
 |---|---|---|---|
@@ -560,30 +572,31 @@ All entries below are **recommended defaults for the implementation baseline**, 
 | D08 | Denominators | Complaint-record counts, raw return-record counts, separate returned units where known | No product return/failure rate without units sold or matching transactions |
 | D09 | Severity | Backend-only rule-derived severity; model hint advisory | Safety overrides require separate validation |
 | D10 | Tenancy | Single synthetic retailer | Multi-tenancy deferred |
-| D11 | Authentication | Secure email/password and server-side session/RBAC | SSO deferred |
+| D11 | Authentication | Secure email/password, server-side sessions, two roles, protected first-Admin setup, Admin-managed user creation/deactivation | No public self-registration or SSO; exact session configuration and account recovery in `SECURITY.md` |
 | D12 | Unresolved links | Accept valid record as `LINKAGE_PENDING`, exclude from batch-specific incidents; reconcile later | No invented supplier/batch IDs |
 | D13 | Idempotency | Same source identity + same payload is no-op; changed payload is admin-visible conflict | Corrections workflow deferred |
 | D14 | AI paths | Historical Batch API and incremental Responses API, common versioned output contract | No classification-triggered dashboard work by Business Users |
 | D15 | Multi-label counting | Primary plus optional secondary; distinct feedback counted once per issue cluster | Avoid repeated mention double-counting |
 | D16 | Zero/incomplete baselines | Count-only gates for complete zero history; insufficient history prevents automatic email | No infinite multiplier |
-| D17 | Recurrence | Reopen within 30 days of resolution; later qualifying spike creates linked episode | Product-owner review of episode length |
+| D17 | Recurrence | **Approved (PB-03, 20 November 2026):** reopen within 30 days of resolution; later qualifying spike creates linked episode | Any future change requires explicit change control |
 | D18 | Notification reliability | Durable outbox, stable event identity, retries, accurate ACCEPTED vs DELIVERED status | Exactly-once provider delivery not promised |
 | D19 | Evaluation | Locked held-out data; provisional ≥90% planted-episode recall and integrity/security gates | Validate feasibility and class-specific gates |
 
 ### 19.1 Items requiring formal sign-off
 
 1. Detection thresholds, minimum complaint counts, and the 28-day historical-coverage definition after calibration.
-2. The 30-day incident-reopen boundary, including whether demonstrations show reopen or linked episodes.
-3. Sandbox recipient directory, quality-inbox fallback, and permitted notification events.
-4. Final held-out evaluation size, class-specific classification gates and ≥90% planted-episode recall target.
+2. Sandbox recipient directory, quality-inbox fallback, and permitted notification events.
+3. Final held-out evaluation size, class-specific classification gates and ≥90% planted-episode recall target.
 
-**Change control:** Any alteration to the thresholds, taxonomy, issue-code dictionary, episode window or email routing must be versioned and reflected in configuration audit logs, evaluation fixtures, acceptance tests and the demo narrative. Until explicitly approved, v1.1 is the working design baseline rather than a signed-off production policy.
+The 30-day recurrence boundary and its reopen-versus-linked-episode behavior are approved under PB-03. PRD §9.3 and AC22 retain that approved rule; recurrence timing is not awaiting sign-off.
+
+**Change control:** Any alteration to the thresholds, taxonomy, issue-code dictionary, episode window or email routing must be versioned and reflected in configuration audit logs, evaluation fixtures, acceptance tests and the demo narrative. The v1.5 implementation baseline retains the per-decision approval statuses above; items listed here remain pending, while D17's recurrence rule is approved under PB-03 and stable logical defect identity across semantically compatible taxonomy versions is approved under DAI-04. This is not a general production-policy approval.
 
 ## 20. References and provenance
 
 **Primary requirements source:** *Capstone Projects — Applied GPT Capability Program for Engineering Practitioners (GPT Coders Track), C5i × Ambilio*, Project 16, “Review and Return Reason Analyser,” catalogue pages 13–14. The brief requires classification of synthetic reviews/return reasons, historical Batch API and near-real-time processing, product/supplier/batch linkage, code-based emerging-cluster detection, source drill-down and planted-cluster evaluation.
 
-**Product decisions:** Admin-only CSV ingestion, business-user investigate/alert rights, backend OpenAI credentials, automatic/manual email and incident lifecycle came from the project discussion. The revised definitions of dataset, roles, detection thresholds, zero-baseline behavior, recurrence, email routing and CI gates are *recommended* MVP resolutions from the ProductPulse MVP Decision Resolution review, pending product-owner ratification.
+**Product decisions:** Admin-only CSV ingestion, business-user investigate/alert rights, backend OpenAI credentials, automatic/manual email and incident lifecycle came from the project discussion. The revised definitions of dataset, roles, detection thresholds, zero-baseline behavior and email routing are *recommended* MVP resolutions from the ProductPulse MVP Decision Resolution review, pending product-owner ratification. The local automated verification and pre-merge evidence approach was explicitly approved by the Product Owner on 22 November 2026 through the requirement change in Appendix G. The 30-day recurrence rule is approved under PB-03 as of 20 November 2026. SEC-01 and PB-06 approaches, the DAI-06 coverage methodology, and DAI-04's stable logical defect identity across semantically compatible taxonomy versions were confirmed on 20 November 2026; exact DAI-06 parameters remain Pending Calibration. OPS-01's Linux VM/Docker Compose topology is preferred but remains Proposed, and no hosting provider is approved.
 
 **Relevant competitor references for context (not normative requirements):**
 - Revuze — https://www.revuze.it/
@@ -602,6 +615,50 @@ All entries below are **recommended defaults for the implementation baseline**, 
 - Promoted basic investigation notes to P0; moved owner assignment/escalation to F22 P1; deferred Viewer role.
 - Added AC19–AC24 and provisional held-out evaluation gates; maintained explicit product-owner sign-off boundaries.
 
+## Appendix B. Changes from v1.1
+
+- On 20 November 2026, replaced §16's prior PostgreSQL database recommendation with SQLite as the only primary relational database for the MVP, using one persistent file shared by the API and worker.
+- Replaced §16's generic queue/worker alternatives with the approved one-worker approach using SQLite-persisted durable job state and notification outbox processing.
+- Updated §13.2's database-access wording to express the existing least-privilege security intent as filesystem permissions for the SQLite database file and its storage.
+- No functional requirements, priorities, role permissions, acceptance criteria, performance targets, security intent, or evaluation requirements changed.
+- ORM and migration-tool choices remain unapproved and are recorded separately in `docs/DECISION_REGISTER.md` and `docs/TECH_STACK.md`.
+
+## Appendix C. Changes from v1.2
+
+- On 20 November 2026, reconciled the recurrence wording with PB-03: the 30-day reopen-versus-linked-episode rule is approved and no longer listed as awaiting sign-off.
+- Preserved the recurrence behavior in §9.3, the D17 decision and AC22; no recurrence rule or acceptance criterion changed.
+- Clarified that exactly-once external email delivery is not claimed and assigned provider-specific idempotency behavior to `ALERT_SPEC.md`.
+
+## Appendix D. Changes from v1.3
+
+- On 20 November 2026, recorded SEC-01's approved secure email/password and server-side session approach, including password hashing, secure HTTP-only cookies, CSRF protection, session expiry/logout invalidation, protected first-Admin setup, and Admin-managed user creation/deactivation. Exact session configuration and account recovery remain for `SECURITY.md`.
+- Recorded PB-06's approved unresolved-link behavior: retain and label valid records `LINKAGE_PENDING`, include them in product-level analytics only with a valid product identity, create no product-only incidents or automatic notifications, and recompute affected detection results after Admin reconciliation.
+- Recorded the approved DAI-06 coverage methodology while keeping exact coverage granularity, completeness criteria, and calibration parameters Pending Calibration for `DETECTION_SPEC.md`.
+- Preserved all P0 requirements and AC01–AC24; no acceptance criterion was removed or weakened.
+
+## Appendix E. Changes from v1.4
+
+- On 20 November 2026, recorded the approved DAI-04 extension: each classification retains its taxonomy version, and versioned issue codes map to stable logical defect identifiers.
+- Semantically equivalent issue meanings may share a logical identifier across versions; changed meanings receive a new identifier and are never automatically merged. The batch-specific cluster key uses the logical identifier.
+- Detection thresholds, coverage calibration, notification routing, and other pending decisions retain their existing statuses; no acceptance criterion was removed or weakened.
+
 ---
 
-**Document end — ProductPulse PRD v1.1**
+## Appendix F. Changes from v1.5
+
+- On 21 November 2026, defined explicit historical and incremental import processing modes, automatic Batch/Responses classification dispatch after accepted feedback is persisted, mode-preserving Admin retries, and the rule that Business Users cannot initiate or retry ingestion.
+- Clarified product defect and return counts by separating fully linked totals from distinctly labelled LINKAGE_PENDING counts; pending-link records still do not create product-only incidents or automatic notifications.
+- Recorded the fixed 86,400-second same-severity automatic notification cooldown, with no MVP Admin override and preserved severity-escalation bypass.
+- At v1.6, preserved AC17 evaluation/CI and AC18 rollback/health-check obligations as external engineering evidence, not runtime API endpoints; v1.7 RC-01 records the approved local-verification replacement for the former CI execution requirement.
+
+## Appendix G. Requirement change control — 22 November 2026
+
+**Change ID:** RC-01  
+**Disposition:** Approved by the Product Owner on 22 November 2026.  
+**Scope:** Replace GitHub-hosted CI merge-gate enforcement with repeatable local automated verification, a documented pre-merge checklist, and retained test evidence. Do not use GitHub Actions or Playwright. Use pytest and FastAPI TestClient for backend/API tests, Vitest and React Testing Library for frontend tests, and repeatable local PowerShell scripts.  
+**Affected requirements:** F16, §14.1, AC17, §16, the §17 hardening sequence, and §18 demo evidence.  
+**Requirement effect:** Automated unit, integration, security, and evaluation checks remain required. The approved blocking outcomes and evaluation metrics are preserved. The checklist requires passing evidence for the exact revision proposed for merge; local scripts report failures and do not provide automated hosted merge enforcement. The deliberately failing automated test and restoration-to-pass demonstration remains required as local verification evidence and remains distinct from deployment rollback under AC18. No evaluation threshold, denominator, or metric definition is approved or changed here.  
+**Workshop review:** The reviewed PRD and planning materials require evaluation, security, deployment, rollback, operating-runbook, and live-demo artifacts, including the deliberate failing-test/restoration demonstration. They do not specify a hosted CI provider or automated browser E2E evidence. No standalone workshop rubric was present in the repository; this review is limited to the repository materials available for this change. Any separately issued mandatory workshop rubric remains controlling and must be reconciled before the applicable capstone evidence is closed. Those workshop deliverables remain required.  
+**Unchanged:** Application technologies and all unrelated product requirements, security requirements, evaluation definitions, calibration decisions, and feature behavior.
+
+**Document end — ProductPulse PRD v1.7**

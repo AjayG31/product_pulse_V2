@@ -1,0 +1,2 @@
+"""ProductPulse backend package."""
+

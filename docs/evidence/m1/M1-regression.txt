@@ -1,0 +1,25 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261122082938
+Username: ARLML918\CodexSandboxOffline
+RunAs User: ARLML918\CodexSandboxOffline
+Configuration Name: 
+Machine: ARLML918 (Microsoft Windows NT 10.0.26300.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}
+$ErrorActionPreference = 'Stop'; $repo = (Get-Location).Path; $env:UV_CACHE_DIR = Join-Path $repo '.tools/cache'; $env:UV_PYTHON_INSTALL_DIR = Join-Path $repo '.tools/python'; $tempRoot = Join-Path $repo '.tools/pytest-temp'; New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null; $env:TEMP = $tempRoot; $env:TMP = $tempRoot; $env:TMPDIR = $tempRoot; $base = Join-Path $tempRoot ('M1-final-' + [guid]::NewGuid().ToString('N')); $evidence = Join-Path $repo 'docs/evidence/m1/M1-regression.txt'; Start-Transcript -Path $evidence -Force | Out-Null; try { 'Command: .tools/bin/uv.exe run --locked pytest -q -p no:cacheprovider --basetemp <workspace temp>' ; & (Join-Path $repo '.tools/bin/uv.exe') run --locked pytest -q -p no:cacheprovider --basetemp $base; if ($LASTEXITCODE -ne 0) { throw "Full M1 pytest suite failed with exit code $LASTEXITCODE" } } finally { Stop-Transcript | Out-Null }
+Process ID: 34952
+PSVersion: 5.1.26100.10068
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.10068
+BuildVersion: 10.0.26100.10068
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Command: .tools/bin/uv.exe run --locked pytest -q -p no:cacheprovider --basetemp <workspace temp>
+
+**********************
+Windows PowerShell transcript end
+End time: 20261122082945
+**********************

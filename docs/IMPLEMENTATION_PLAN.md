@@ -1,0 +1,345 @@
+# ProductPulse Implementation Plan
+
+**Version:** 0.7
+**Status:** Approved — Planning Baseline and Milestone Workflow; local verification requirement change approved 22 November 2026  
+**Date:** 22 November 2026  
+**Approval date:** 21 November 2026  
+**Approval scope:** Planning baseline and milestone workflow. PP-010 is Implementation Ready following closure of PP-001; implementation still requires inclusion in an approved bounded milestone.  
+**Milestone workflow approval:** Product Owner approved 21 November 2026. The ticket graph and decision statuses are unchanged.  
+**Requirements source:** [PRD](PRD.md) v1.7  
+**Decision authority:** [Decision Register](DECISION_REGISTER.md) v1.7
+
+## 1. Purpose and boundaries
+
+This plan turns the current ProductPulse specifications into dependency-ordered work for one developer. It keeps every P0 feature F01-F17, acceptance criterion AC01-AC24, and PRD §14.1 workshop/capstone deliverable in scope. Proposed IDs are planning references in this document; no tickets are created here.
+
+The approved architecture remains React + TypeScript + Recharts, FastAPI, SQLite on persistent local storage, and one separate worker sharing that SQLite database. This plan does not add a broker, database, service, deployment provider, or unapproved library. Tool choices that remain open in TECH_STACK.md must be resolved before their dependent implementation.
+
+No Proposed, Open, Draft, or Pending Calibration item is treated as approved. A task may implement only the contract that its specifications and decisions approve. The plan does not create application code, migrations, or tickets. The approved process below authorizes one bounded milestone at a time; it does not change ticket readiness or any specification, decision, or external-action approval gate.
+
+## 2. Status and readiness rules
+
+### 2.1 Design Approved versus Implementation Ready
+
+| Status | Meaning | Permitted next step |
+|---|---|---|
+| **Design Approved** | The source has an explicit approved status at the stated scope. Conditional baselines retain their prerequisites. | Plan against the approved behavior. This does not approve unspecified parameters, code, migrations, activation, or providers. |
+| **Implementation Ready** | The bounded ticket has an approved requirement and contract; all decisions and specification conflicts it depends on are resolved; implementation and test tools are chosen; its acceptance evidence is clear. | Include it in a bounded milestone proposal. Start it only after the milestone is approved and its dependencies/readiness are confirmed. |
+| **Decision blocked** | A named product, security, operations, AI, alert, or calibration decision remains open. | Resolve it in its owning specification and Decision Register first. Do not encode a default. |
+| **Gated behavior** | A feature can be built or displayed in draft/shadow form, but activation or external effect requires additional approval. | Keep it inactive and fail closed until every listed gate is approved. |
+
+Readiness applies per ticket. Draft, calibration, and approval states are not upgraded by this plan.
+
+### 2.2 Milestone workflow
+
+One explicit human approval authorizes the bounded milestone and its named implementation tickets. The approval is limited to the listed scope and does not remove individual ticket readiness, dependency, acceptance, security, or testing requirements.
+
+1. Define a bounded milestone with named implementation ticket IDs, scope and exclusions, execution order, ticket dependencies, governing specification versions, per-ticket automated acceptance checks and tests, and evidence to retain.
+2. Include tickets that are Implementation Ready or explicitly `IR after` named earlier implementation tickets in the same milestone. All non-ticket prerequisites—including product/security decisions, approved specification contracts, tooling, and unrelated ticket dependencies—must already be resolved. Recheck readiness immediately before each ticket starts; a ticket with an unmet dependency does not start.
+3. Obtain one human approval for the milestone scope before modifying code. Work through implementation tickets one at a time. Recheck readiness and dependencies immediately before starting each ticket. If a required check fails, fix it within scope and keep dependent tickets paused until it passes. Stop affected work if the failure cannot be fixed within scope or a gate becomes unresolved; unaffected tickets may continue only if their own gates remain clear and they stay within scope.
+4. Record acceptance-check and test evidence for every implementation ticket. At milestone end, provide one consolidated review report with each ticket's outcome, evidence, review findings, approved deviations, unresolved gates, and risks. Do not require a separate implementation or closure approval for each ticket in the approved milestone.
+5. Obtain separate explicit approval for unresolved product/security decisions, changes to approved specifications, security exceptions, scope expansion, and consequential external actions. Milestone approval never overrides these holds.
+
+### Mandatory stop conditions
+
+- If a prerequisite decision or dependency for implementation is unresolved, do not start—or, if already underway, stop—the affected implementation ticket and all dependent work. A decision-resolution ticket may continue only within its approved evidence-gathering scope and cannot settle the decision without the Product Owner's explicit disposition. Continue independent implementation tickets only when their prerequisites are satisfied and they remain within the approved milestone.
+- If a mandatory test fails, correct it only within the approved ticket and milestone scope. If the failure cannot be fixed within that scope, stop the affected work, report the failure, and keep the ticket incomplete.
+- If a security or authorization issue is discovered, stop the affected work immediately, preserve safe evidence, and report the issue and proposed remediation. Resume only after explicit user direction.
+- If a change to an approved requirement or specification is necessary, stop the affected work and obtain explicit approval before changing the approved source or dependent implementation.
+- If a consequential external action needs approval, stop before taking it and obtain that approval. This includes real email, external publication, deployment, provisioning external resources, unapproved spend, and commit, push, or merge actions.
+
+Planning phases and the backlog table are sequencing aids, not pre-approved milestone scopes. This workflow does not make a blocked ticket Ready. In particular, detection activation, incident-producing current results, and notifications remain disabled until every applicable classification-authority, detection, coverage/calibration, evaluation, alert-routing, and provider decision is approved; all relevant code must fail closed.
+
+### 2.3 Source baseline at review
+
+- PRD v1.7 is the product source of truth. It requires F01-F17, AC01-AC24, and the §14.1 capstone evidence. PRD change RC-01 replaces hosted CI merge gates with local automated verification, a documented pre-merge checklist, and retained evidence; all listed workshop deliverables remain required.
+- ARC-01 through ARC-08 retain their recorded scopes. PP-001 is Done with approved implementation and test tools, repeatable local PowerShell scripts, and the ARC-06 local verification/pre-merge process. GitHub Actions and Playwright are excluded. Exact package releases are resolved at project setup. Host and operational parameters remain open as recorded in the specs.
+- TECH_STACK v1.0 records the PP-001-approved Python, frontend, ORM/migration, worker, backend/API and frontend test, local check runner, pre-merge evidence process, security, and later-stage performance tools. Do not create local scripts or application tests in this documentation follow-up. Email sink and deployment host remain open.
+- API_SPEC v1.4.0, DATA_MODEL v1.4, UI_SPEC v0.3, SECURITY v1.0, and AI_SPEC v1.0 are conditional design baselines. Their stated implementation dependencies still apply.
+- DETECTION_SPEC v1.1 is a Draft clarification; v1.0 remains the approved conditional baseline. ALERT_SPEC v0.2 and EVALUATION_PLAN v0.4 are Draft.
+- PB-01 and exact DAI-06 coverage parameters, EV-01/02/03, and OPS-01 remain pending/proposed. AI model ID, initial taxonomy seed, authoritative completed-classification attempt, parser details, auth/session values, worker recovery values, retention/backup parameters, and alert routing/provider details also remain unresolved.
+
+## 3. Dependency-ordered phases and milestones
+
+The sequence is for one developer, not a calendar promise or an approval grant. Phase groupings are planning milestones; each implementation milestone still needs a bounded ticket list and one explicit approval under this workflow. Estimates in §8 are active solo-developer working days, excluding approval wait and rework caused by changed decisions.
+
+| Phase / milestone | Main work | Deliverables and acceptance gate | Spec dependencies |
+|---|---|---|---|
+| **0. Foundation decisions and deployment suitability** | Record approved tool/test/data/migration/UI choices and assess early OPS-01 provider suitability; close first-slice auth, CSV, taxonomy/AI, worker, metric, and alert decisions where possible. | Record approved decisions in the register and align affected specs. Provider suitability is assessed now; if no target is approved, record the blocker without selecting one. | AGENTS.md; DECISION_REGISTER; TECH_STACK; SECURITY; API_SPEC; AI_SPEC; DATA_MODEL; ALERT_SPEC; OPS-01; ARCHITECTURE. |
+| **1. Runtime and identity foundation** | Repository skeleton, API/worker entry points, SQLite connection policy, local verification baseline, `/health`, secure first-Admin and session/RBAC APIs. | API and one worker use the same persistent local SQLite file; repeatable local checks use the approved PowerShell scripts; the pre-merge checklist records passing evidence for the exact proposed revision; Admin-only routes are denied server-side to Business Users; auth tests cover side effects. | ARCHITECTURE §§4-9, 15-17; TECH_STACK; DATA_MODEL §§2, 7-8; SECURITY §§3-8; API auth; ARC-01-04/06/08; SEC-01/02. |
+| **2. Synthetic data and ingestion vertical slice** | Reproducible synthetic source fixture/corpus; protected upload artifact; Admin template/mapping/preview; confirm a small import; partial acceptance, rejection CSV, job status/retry. | Exact file/hash and mapping bind to an immutable preview; accepted identities are idempotent; partial rejection reasons are downloadable; rejection CSV is formula-safe and omits unnecessary raw feedback; direct Business User calls create no file/job. | PRD §§5.3, 7, AC01-04/16/23; API ingestion/report contracts; DATA_MODEL upload/job/artifact; SECURITY §§9, 14; DAI-01/02/07/08; OPS-06. |
+| **3. Linkage, conflict resolution, and durable worker** | Reference imports and linkage reconciliation; separately build Admin source/mapping conflict queue and explicit resolution; implement durable SQLite worker, leases, retry/recovery and Admin job controls. | Linkage corrections never guess identifiers; source/mapping conflicts are reviewed in their own workflow, not hidden in linkage reconciliation; jobs survive restart and are idempotently recovered. | PRD AC03/04/19/23; API reconciliation and processing jobs; UI_SPEC §4.9; DATA_MODEL; DAI-01/02/06/08; ARC-04; OPS-02/06. |
+| **4. Classification and evidence views** | Select the supported model after a development fixture exists; Responses first, then Batch using the same approved contract; dashboard and product/feedback drill-down. Independent dashboard metrics proceed when their contracts are approved; unresolved PB-05 KPIs return null/`PENDING_DEFINITION`. | Worker infrastructure exists before either provider workflow. Strict output and source/evidence validation is shared; Batch results correlate by persisted classification ID; failures and non-definitive results never become `NO_DEFECT`. | PRD Sections 6-8, AC05-08/12/24; AI_SPEC Sections 3-15; DATA_MODEL Sections 4.5-4.6; API processing/dashboard/product; DAI-03/04/05/07; ARC-04; PB-05. |
+| **5. Admin configuration and detection-rule drafts** | User management UI; taxonomy review/draft/activation; detection-rule list/detail/review/draft API and UI; recipients, groups and notification routing; configuration audit history; Admin operations. | All Admin actions are backend-authorized and audited. Detection drafts remain inactive and may be created/reviewed before calibration. Activation remains a separate gated step; no candidate taxonomy or detection rule is shown as active without server approval. | UI_SPEC Sections 2, 4.9-4.10, 8, 10; API `/admin/users`, `/admin/taxonomies`, `/admin/detection-rules`, recipient/group/rule endpoints and `/admin/audit-events`; DATA_MODEL config/audit entities; SECURITY Sections 5, 12; DAI-04; DETECTION_SPEC v1.0 conditional baseline; ALERT_SPEC (Draft). |
+| **6. Detection shadow evaluation, calibration, gated activation and incidents** | Run deterministic candidate rules in non-activating development/shadow mode; resolve PB-01/DAI-06 and applicable evaluation approvals from evidence; activate reviewed rules only through the gated API/UI; apply approved current results and complete incident lifecycle. | No activation or incident-producing current result until PP-060 calibration and PP-009 applicable evaluation approval are recorded. Insufficient coverage yields unavailable/unknown and no automatic incident/email. Historical recomputation does not mutate incidents or notify. | PRD Section 9, AC09/12/19-22/24; DECISION_REGISTER PB-01/02/03/06/09, DAI-06, EV-01/02/03; DETECTION_SPEC; DATA_MODEL; API detection/incident/Admin rules; EVALUATION_PLAN. |
+| **7. Sandbox notifications** | Implement sandbox/local capture adapter, durable outbox, automatic notifications and incident-scoped manual preview/confirmation. Complete directory and routing configuration only to the approved sandbox boundary. | ALERT_SPEC and route/sink decisions are approved first. Incident/outbox writes are atomic; provider I/O is outside DB transactions; manual preview alone queues nothing; no real or supplier email; detection-driven sends stay gated until detection approval. | PRD §§9-10, AC10-14; ALERT_SPEC (must be approved); SECURITY §§11, 14; API notification routes; DATA_MODEL outbox; ARC-05/07; PB-04; OPS-02. |
+| **8. Security, integration, evaluation and local verification** | Complete scoped auth, upload/formula/prompt, Admin config and notification security checks; exercise vertical slices; resolve EV-01/02/03 after development evidence; lock held-out data, report results, and apply approved local checklist gates. | AC01-AC24 and SEC-AC01-16 evidence is reviewable. No numeric evaluation gate is enforced until approved. A deliberately failing automated test and restoration are demonstrated with local evidence. | PRD §§14-15; SECURITY §§9-16; EVALUATION_PLAN; AI/DETECTION specs; EV-01-05; ARC-06; OPS-04. |
+| **9. Non-production deployment and capstone closeout** | Deploy one instance on the early-selected, approved suitable target; monitor; document and exercise coherent database/artifact backup, restore and rollback; complete workshop evidence and live demo. | API and one worker share persistent local SQLite and protected artifact storage; health checks pass after deploy/restore/rollback; AC18 and all §14.1 evidence are reviewable. Do not assume schema rollback from app rollback. | PRD §§13-18, AC18; ARCHITECTURE §17; SECURITY §15; OPS-01/03/05/06; DECISION_REGISTER; approved deployment target. |
+
+## 4. Recommended solo-developer sequence
+
+1. Start decision tickets that can be resolved without code, including tool choices and deployment-provider suitability. Keep proposals marked proposed until approved. Do not wait on later calibration decisions to set up independent foundations.
+2. After PP-001 closes, create the smallest verified runtime and synthetic fixture. Implement approved pure helpers (PB-02/PB-03) early, with focused tests, while auth/CSV decisions are being resolved.
+3. Build one Admin ingestion path end to end: login → upload/map → preview → explicit mode → confirm → durable job/source rows → rejection report where applicable. Then add reference imports, linkage reconciliation, and the separate source/mapping conflict review workflow.
+4. Build the durable worker and recovery path before implementing either Responses or Batch classification. Implement Responses first as the thin vertical slice; add Batch next against the same validated contract.
+5. Add analytics and drill-down, then finish every Admin configuration screen/API in small tickets. Keep independent metrics moving while unresolved PB-05 KPI values remain null/PENDING_DEFINITION. Build detection-rule draft/review API/UI before calibration; do not activate.
+6. Use synthetic development data for shadow detection and calibration. After PP-060 records PB-01/DAI-06 approval and PP-009 records applicable evaluation approval, enable only the reviewed rule through PP-042/PP-061. PP-025 may apply current results only after that activation path exists. Add notifications only after ALERT_SPEC and routing/sink decisions are approved.
+7. Run security and acceptance work continuously with each ticket; complete held-out evaluation and local verification evidence after EV decisions. Deploy, monitor, backup/restore, rollback, and capstone evidence remain near the end.
+
+## 5. Decision-resolution tickets, readiness, and gates
+
+The decision tickets below record and reconcile decisions; they do not silently choose values. Approval remains with the user/product owner. A ticket can be investigated before approval, but its implementation gate remains open until the source specification and Decision Register are updated.
+
+| ID | Decision to resolve | Blocks |
+|---|---|---|
+| **PP-001** | Record approved Python/React packages, pytest/FastAPI TestClient, Vitest/React Testing Library, local PowerShell check scripts, data-access/migration approach, worker library, frontend routing/state, and ARC-06 local verification/pre-merge evidence decision. | Done. PRD change RC-01 resolves the hosted-CI requirement conflict; PP-010 may begin after its readiness and milestone checks. No unselected tool or service is treated as approved. |
+| **PP-002** | Assess and seek approval for a deployment target that supports one API, one worker, persistent local SQLite and artifact storage, protected secrets, TLS, health/log visibility, backup, and rollback. Record OPS-01 status and suitability evidence early. | Final deployment only. This early task does not perform deployment and does not approve the proposed Linux VM/Docker Compose topology or any provider without explicit approval. |
+| **PP-003** | Resolve auth/session bootstrap, password/session/CSRF/CORS values, account lifecycle/recovery boundary, email canonicalization, rate limits, and Admin/security audit scope; align SECURITY and API. | Authentication implementation and security acceptance. |
+| **PP-004** | Finalize CSV bytes/encoding/BOM/parser/timestamp/identifier/field limits and DAI-01 mapping-conflict application semantics; align API, Security, and Data Model. | Upload confirmation, parser behavior, conflict resolution, and rejection report contract. |
+| **PP-005** | Approve the initial taxonomy seed and resolve the authoritative completed-classification-attempt rule consistently across AI_SPEC, DATA_MODEL, and DETECTION_SPEC. | Model evaluation contract, classification counting, and trustworthy detection inputs. This does not select the model or calibrate thresholds. |
+| **PP-006** | Approve PB-05 glossary definitions only where valid units and denominators are supported; leave unsettled metrics pending. | Numeric KPI claims; undefined values remain null/`PENDING_DEFINITION`. |
+| **PP-007** | Resolve worker lease/renewal/stale-owner, retry/backoff/rate and SQLite busy behavior plus OPS-03 retention/backup cadence/mechanism, without changing the one-worker architecture. | Durable retry/recovery and operational automation; backup/retention details. |
+| **PP-008** | Review and approve ALERT_SPEC routing precedence/group/fallback/route-key behavior, sink/provider, preview-token lifecycle, cooldown edge cases, provider verification and retry eligibility. | Recipient/routing activation and manual/automatic notification integration. No real email is approved. |
+| **PP-009** | After development evidence, resolve EV-01/02/03 dataset/support and quality gates, cost denominator alignment, and freeze the approved EV-04 lead-time comparator/protocol before held-out use. | Final held-out evaluation and any numeric pre-merge checklist gates. Cost remains reported without a gate unless approved. |
+| **PP-060** | After shadow evidence, approve/revise DETECTION_SPEC and resolve PB-01 thresholds/minimums and DAI-06 exact coverage scope/completeness/calibration. Record all activation prerequisites. | Detection rule activation, incident-producing current results, and automatic notifications. |
+
+**Implementation-ready classification:** the backlog marks each build task either `IR after ...` (all remaining prerequisites are explicit ticket dependencies) or `Blocked: ...` (a named pending decision remains). ARC-06 and PP-001 are resolved; PP-010 is Implementation Ready with the local verification baseline in scope. It has no unresolved CI/tooling prerequisite. PP-010 may start only after inclusion in an approved bounded milestone and a fresh readiness check. PP-011 and PP-023 remain follow-ons to PP-010; PP-041/PP-043 draft API/UI work is calibration-independent once their listed tool/auth prerequisites close. PP-042/PP-061 activation remains blocked on PP-060 and PP-009. PP-060 and PP-009 are intentionally late decision tasks; they do not block unrelated foundations or draft management. Ready tickets must be included in an approved bounded milestone before code changes; no separate per-ticket implementation approval is required.
+
+## 6. Components that can be developed first
+
+Once PP-001's tool selections are approved and a bounded implementation milestone is approved, these are candidates for early work, subject to each ticket's dependencies and readiness:
+
+- Minimal React/FastAPI skeleton, local automated verification baseline, shared SQLite connection policy, process `/health`, and redacted logging (PP-010). PP-010 is Implementation Ready now that PP-001 and ARC-06 are resolved; the local script/check scaffold is future PP-010 implementation work.
+- Synthetic source-data generator and reproducible small development fixture; expand to the PRD 10,000-record/at-least-35-day development corpus without claiming that this is the final held-out set (PP-011).
+- Pure server-side PB-02 incident transition validator and PB-03 30-day recurrence helper, without detection thresholds or notification effects (PP-023).
+- Shared loading/empty/error shell components after the router/component choices in PP-001 are approved (included in the relevant UI tickets).
+
+Do not start auth, CSV parsing, worker retry policy, model integration, taxonomy activation, detection activation, notification delivery, final evaluation, or deployment before their specific gates close. Retention/purge automation is not part of the early artifact service.
+
+## 7. Cross-cutting implementation, testing, security, and evaluation rules
+
+### Testing and local verification
+
+- Every implementation ticket includes automated acceptance checks mapped to its criteria, focused unit/contract tests, and relevant integration or authorization tests; retain commands, results, and evidence links with that ticket. No ticket is accepted on a manual happy-path demonstration alone.
+- Use one human approval for the bounded milestone, not a separate implementation or closure approval for each listed ticket. Preserve the ticket-level readiness check, test evidence, security review, and explicit decision/specification/external-action hold points.
+- Use pytest and FastAPI TestClient for backend/API tests, Vitest and React Testing Library for frontend tests, and repeatable local PowerShell scripts to run checks. Keep developer checks separate from final EV quality gates. Do not enforce an unapproved evaluation threshold.
+- Complete the documented pre-merge checklist for the exact proposed revision and retain commands, revision, results, and evidence with the ticket. A required failed, skipped, or unavailable check blocks checklist approval until corrected and rerun. No hosted CI merge service is used.
+- Test SQLite constraints, API/worker contention, short transactions, idempotency, leases, restart recovery, and artifact/database consistency using the approved one-worker design.
+- CSV rejection reports are P0 output from ingestion, not the deferred P1 report-export feature. Exercise formula-leading feedback values, headers, and all other user-controlled fields at the CSV-output boundary. If the rejection report omits raw feedback or input headers, assert those values do not appear; escape any user-controlled value it does include. Verify downloaded bytes are formula-safe and stored source values remain unchanged. Reports contain safe row reasons and no unnecessary raw feedback. This is required work under SECURITY §9.1 and SEC-AC15 / EVALUATION_PLAN SEC-P05.
+- Exercise prompt injection and malformed/refused AI output. Validate exact source identity and evidence. No failure, refusal, uncertainty, needs-review, or unsupported label is converted to `NO_DEFECT`.
+- AC17 is engineering evidence: calculate only approved metrics/gates on the locked holdout, record version/config/manifest, and demonstrate a deliberately failing automated test followed by restoration to a passing state. Retain both local runs and revision identities. This evidence is separate from deployment rollback.
+
+### Security and privacy
+
+- OpenAI calls stay on the backend. Keep credentials out of bundles, responses, logs, prompts, errors, and generic audit records. Treat feedback, CSV headers/values, and authored content as untrusted.
+- Test direct Business User requests to all Admin ingestion, user/configuration, reconciliation, retry, and operational endpoints. Backend enforcement is authoritative; hiding a UI control is not authorization.
+- Validate uploads, mapping, hash binding, opaque artifact IDs, server-controlled paths, authorized report downloads, formula-safe generated CSV, escaped UI rendering, and protected local storage.
+- Test auth/session/CSRF/rate limits only after PP-003 closes. Test detection-rule draft/review separately from activation: drafts must remain inactive and create no incidents or notifications. Test activation fail-closed behavior until PP-060 PB-01/DAI-06 approvals and PP-009 applicable evaluation approvals are recorded; verify Admin rule configuration/activation in PP-025 and end-to-end behavior in PP-059.
+- Sandbox/local capture only. No real email, supplier email, or external send is approved. Test recipient authorization, preview/confirm separation, idempotency, outbox atomicity, and honest delivery states.
+- Complete the scoped security verification tickets and produce the PRD-required security triage and injection-test evidence.
+
+### Evaluation discipline
+
+- Use development data for model selection, rule calibration, and candidate iteration. Do not lock the final holdout until PP-009 is approved; any holdout use that guides a change consumes that set for the affected claim.
+- Keep source identity, episode grouping, coverage, UTC event times, taxonomy/model/prompt/rule versions, and evaluation configuration reproducible.
+- Report classification metrics by class, schema validity, source/link integrity, episode recall/false positives/misses, lead-time comparison, cost per approved denominator, latency/freshness, and notification/RBAC safety. Avoid quality claims where support is insufficient.
+- PRD's provisional recall/performance figures are not silently promoted to pre-merge checklist gates. Final held-out count, class support/gates, episode horizon/recall gate, and other EV-01/02/03 values remain pending until approved.
+
+## 8. Proposed ticket backlog (not yet created)
+
+All tickets are P0 unless an explicit PRD requirement is changed by the product owner. Estimates are approximate solo active workdays, not commitments; each task should remain independently reviewable. `DEC` means decision-resolution, `BUILD` implementation, `SEC` security verification, `EVAL` evaluation, `DEPLOY` deployment, and `CAPSTONE` workshop evidence. `IR after` means it can become Implementation Ready when listed dependencies close; `Blocked` names a pending decision or approval. The table is topologically ordered: each prerequisite ticket appears before its dependent ticket. Draft detection-rule management is independent of calibration; only activation and incident-producing use are gated.
+
+| ID | Class / readiness | Priority | Est. | Dependencies | Ticket scope and acceptance gate | Specification references |
+|---|---|---:|---|---|---|
+| PP-001 | DEC / Done | P0 | 1-2d | — | Record approved tooling and resolve PRD CI requirements through approved local verification change RC-01; update affected specifications and readiness notes. | AGENTS.md; TECH_STACK v1.0; PRD v1.7 F16/§14.1/AC17; DEC ARC-01-04/06 |
+| PP-002 | DEC / start now | P0 | 0.5-1.5d | — | Early OPS-01 target-suitability assessment and decision request; verify required local persistence/topology/operations and record approval status. No deployment in this task. | ARCH §17; DEC OPS-01; PRD AC18 |
+| PP-003 | DEC / start now | P0 | 1-2d | — | Align auth/session/bootstrap, CSRF/CORS, account lifecycle, normalization, rate limits, and audit scope in SECURITY/API/Decision Register. | SECURITY §§3-8, 12-13; API auth; DEC SEC-01/02 |
+| PP-004 | DEC / start now | P0 | 1-2d | — | Close parser and mapping-conflict contract, including encoding/limits/time/IDs/report lifecycle; align the three specs. | API ingestion/reconciliation; SECURITY §9; DAI-01/02/08; DATA_MODEL upload |
+| PP-006 | DEC / start now | P0 | 0.5-1d | — | Approve PB-05 glossary definitions only where valid units and denominators are supported; leave unsettled metrics pending. Only affected numeric KPI values are blocked; independent dashboard metrics and null/`PENDING_DEFINITION` states may proceed. | PRD §§6, 13; DEC PB-05; API dashboard; UI §5 |
+| PP-007 | DEC / start now | P0 | 1-2d | — | Resolve worker recovery/retry/SQLite busy policy and OPS-03 artifact/backup retention parameters. | ARCH §§8-9,17; DEC ARC-04, OPS-02/03/06; ALERT §9 |
+| PP-008 | DEC / start now | P0 | 1-2d | — | Reconcile and approve ALERT_SPEC decisions; retain sandbox-only scope and no real-send authorization. | ALERT §§4-10,15,18; DEC PB-04, ARC-05, SEC-03; API notification |
+| PP-005 | DEC / start now | P0 | 1-2d | — | Approve the initial taxonomy seed and authoritative completed-classification-attempt rule across AI_SPEC, DATA_MODEL, and DETECTION_SPEC. Do not select a model or thresholds here. | AI_SPEC §§3-15; DATA_MODEL classification; DETECTION_SPEC; DEC DAI-04/05/06; PRD AC05/24 |
+| PP-010 | BUILD / Implementation Ready | P0 | 1-2d | PP-001 (Done) | Create selected React/FastAPI skeleton, configuration/secrets boundary, redacted logs, approved SQLite connection/bootstrap invariants, schema-version entry point, API/worker entry points, `/health`, and local automated verification baseline using pytest/FastAPI TestClient, Vitest/React Testing Library, repeatable PowerShell scripts, and approved Bandit/pip-audit/npm audit checks. Leave SQLite busy-timeout and worker lease/retry/recovery values to PP-007; introduce no defaults for them. ZAP Baseline and Locust remain later-stage checks. | ARCH §§4-9,15-17; TECH_STACK; DATA_MODEL §§2,7-8; DEC ARC-01-04/06/08 |
+| PP-011 | BUILD / IR after PP-010 | P0 | 2-3d | PP-010 | Generate reproducible synthetic source fixture and development corpus (10,000 records, ≥35 days), manifest and explicit coverage truth; no final holdout lock. | PRD §§7.4,14; AI_SPEC; EVALUATION_PLAN; DEC DAI-06, EV-01 |
+| PP-012 | BUILD / blocked by PP-003 | P0 | 2-4d | PP-003, PP-010 | Implement first-Admin provisioning, login/session/logout, backend roles, Admin user APIs (create/list/deactivate only), safe password handling, and route guards. | PRD F01, AC01; SECURITY §§3-8; API `/auth`, `/admin/users`; UI §4.1; DEC SEC-01/02 |
+| PP-013 | BUILD / blocked by PP-004 | P0 | 2-3d | PP-004, PP-010, PP-012 | Implement protected artifact primitives and one Admin CSV template upload, mapping, immutable preview, exact hash binding, and row validation. | PRD F02, AC01-03; API ingestion/template/preview; SECURITY §9; OPS-06; DAI-07/08 |
+| PP-014 | BUILD / blocked by PP-004 | P0 | 1-2d | PP-013 | Confirm one valid feedback preview with explicit mode; persist accepted source rows/job once, preserve mode and hash, and return a stable job ID. Keep reports, retry, and conflict-review work in separate tickets. | PRD AC02/04; API preview confirm; DATA_MODEL source/job; DAI-02/07/08 |
+| PP-018 | BUILD / blocked by PP-007 | P0 | 2-3d | PP-010, PP-014, PP-007 | Build durable SQLite job claim/lease/recovery/reconciliation base using one worker and short transactions; prove API/worker share the DB and recover after restart. | ARCH §§8-9; API processing jobs; DATA_MODEL jobs; DEC ARC-04; OPS-02 |
+| PP-034 | BUILD / blocked by PP-004 | P0 | 1-2d | PP-013, PP-014, PP-004 | Add partial acceptance and downloadable rejection CSV with safe row reasons. Test formula-leading feedback/header/user fields at the output boundary; assert omitted raw values stay out of the report, escape any included user-controlled cells, and preserve stored source data. | PRD F02/F03, AC03; API rejection report; SECURITY §§9.1,14 SEC-AC15; EVALUATION_PLAN SEC-P04/05 |
+| PP-035 | BUILD / blocked by PP-007 | P0 | 1-2d | PP-012, PP-014, PP-018, PP-007 | Add Admin ingestion-job status, safe error summary, eligibility-aware retry API/UI, preserving import mode and idempotency. | PRD F03/F15, AC04/16; API ingestion/processing jobs; UI §4.9; DEC OPS-02 |
+| PP-015 | BUILD / blocked by mapping contract | P0 | 2-3d | PP-011, PP-014, PP-004 | Implement reviewed reference imports and linkage reconciliation; preserve unresolved records as `LINKAGE_PENDING`; recompute affected analytics without invented identifiers. | PRD F07, AC19; API linkage; DATA_MODEL entities/linkage; DEC PB-06, DAI-01/06 |
+| PP-036 | BUILD / blocked by mapping semantics | P0 | 1.5-2.5d | PP-012, PP-014, PP-015, PP-004 | Implement Admin source-payload and reference-mapping conflict list/detail/resolve APIs with explicit validated decisions and audit. This is a separate conflict-resolution domain from feedback-to-product/supplier/batch linkage reconciliation in PP-015. Never overwrite original source text or guess mappings. | PRD F03/F07, AC03/19/23; API `/admin/reconciliation/conflicts`; UI §4.9; DAI-01/02; DATA_MODEL conflict/audit |
+| PP-033 | DEC / blocked until dev corpus | P0 | 1-2d | PP-005, PP-011 | Evaluate supported model/snapshot on development data for the shared Responses/Batch contract; record model ID, evidence, deterministic input-size/overflow policy, and approval. Never silently truncate feedback. | AI_SPEC §§3-15; DEC DAI-05; PRD AC05-08; TECH_STACK backend boundary |
+| PP-016 | BUILD / blocked by model, taxonomy and worker gates | P0 | 2-3d | PP-005, PP-014, PP-018, PP-033 | Implement incremental Responses classification through the durable worker, shared strict validator, immutable attempts, safe failure/usage capture, and Admin recovery. | PRD F05/F06, AC05/06/08/24; AI_SPEC; DATA_MODEL classification; API processing jobs; DEC DAI-03/05/07; ARC-04 |
+| PP-017 | BUILD / blocked by PP-016 | P0 | 2-3d | PP-016, PP-018, PP-033 | Implement historical Batch submission/reconciliation using persisted attempt IDs as custom IDs and the same approved model/schema contract; cover ambiguous submission recovery. | PRD F04/F06, AC05/07/24; AI_SPEC Batch; DATA_MODEL attempts; API processing; DEC DAI-05/07; ARC-04 |
+| PP-019 | BUILD / IR after PP-015/016/017/018; PB-05 KPI values gated | P0 | 1.5-2.5d | PP-015, PP-016, PP-017, PP-018 | Implement server-side overview/trend, freshness, processing and coverage queries for metrics with approved contracts. Return null/`PENDING_DEFINITION` for unresolved PB-05 KPI values; do not block independent dashboard data. | PRD F09/F15, AC08/16/24; API dashboard; UI §§4.2,5-7; DATA_MODEL analytics; DEC PB-05/06 |
+| PP-020 | BUILD / IR after chosen UI tools | P0 | 2-3d | PP-001, PP-012, PP-019 | Build role-aware app shell and Overview dashboard with filters, accessible charts, 30-second refresh/manual refresh, stale/empty/error/pending states. | PRD F09, AC16; UI §§2-3,4.2,5-9; API dashboard; ARC-01/08 |
+| PP-021 | BUILD / blocked by data views | P0 | 2-3d | PP-015, PP-016, PP-019, PP-020 | Build Product Intelligence and Feedback Explorer detail/drill-down with original feedback references, classifications, linkage state and evidence. | PRD F10, AC12/19/24; UI §§4.3-4.4; API products/feedback; DATA_MODEL lineage |
+| PP-022 | BUILD / shadow only; blocked by common worker/classifier | P0 | 2-3d | PP-005, PP-011, PP-015, PP-016, PP-017, PP-018 | Implement deterministic, versioned candidate detection evaluation in development shadow mode; show counts/rationale/coverage suppression; never create incidents or send email in this ticket. | PRD F08, AC09/20/21; DETECTION_SPEC; DATA_MODEL detection; API detection; DEC PB-01/09, DAI-06 |
+| PP-060 | DEC / blocked until PP-022 evidence | P0 | 1-2d | PP-022 | Approve/revise detection clarification and calibrate PB-01/DAI-06 values from development evidence; explicitly record activation conditions. | PRD §§9,15; DEC PB-01, DAI-06; DETECTION_SPEC v1.1 Draft; EVALUATION_PLAN |
+| PP-023 | BUILD / IR after PP-010 | P0 | 0.5-1d | PP-010 | Implement pure PB-02 server transition validator and PB-03 30-day recurrence helper with table-driven tests; no detection or notification side effects. | PRD AC15/22; DEC PB-02/03; ALERT_SPEC §3; DATA_MODEL incident states |
+| PP-024 | BUILD / blocked by auth/UI choices | P0 | 2-3d | PP-012, PP-020, PP-023 | Implement incident API/UI for state actions, append-only notes, events, detail/evidence display and stale-write conflict handling. | PRD F13/F17, AC12/15/22; API incidents/events/notes; UI §§4.5-4.6; DATA_MODEL incident/audit |
+| PP-026 | BUILD / blocked by alert decisions | P0 | 1-2d | PP-008, PP-010 | Implement only the approved local sandbox/capture adapter boundary and safe status contract; prove no external send capability. | PRD F11/F12; ALERT_SPEC §§9,15; DEC ARC-05, SEC-03; TECH_STACK |
+| PP-029 | SEC / blocked by auth decisions | P0 | 1-1.5d | PP-003, PP-012 | Verify login/session/CSRF/account lifecycle, password secrecy, initial Admin setup, and direct Business User denial for every Admin command; assert denied calls have no side effects. | PRD AC01; SECURITY §§3-8,14 SEC-AC01-08; API auth/Admin routes; AGENTS.md |
+| PP-030 | SEC / blocked by parser/model decisions | P0 | 1.5-2d | PP-004, PP-013, PP-016, PP-017, PP-034 | Verify upload/path/artifact/report authorization, formula injection in P0 rejection CSV, inert rendering, prompt injection, schema/evidence validation, safe errors and redaction. | SECURITY §§9-10,14 SEC-AC09-15; EVALUATION_PLAN SEC-P04/05; API rejection report; AI_SPEC |
+| PP-032 | BUILD / integration gate | P0 | 1.5-2d | PP-014, PP-016, PP-017, PP-019, PP-020, PP-021, PP-034, PP-035 | Verify Admin ingest → durable job → Responses/Batch result → dashboard/detail, including AC02-08, AC16, AC24 and idempotent retry. Keep as a focused end-to-end slice. | PRD AC02-08/16/24; API ingestion/processing/dashboard; UI §§4.2,4.8-4.9; AI_SPEC; ARC-04 |
+| PP-037 | BUILD / IR after auth UI base | P0 | 1-2d | PP-001, PP-010, PP-012 | Add Admin User Management screen: list, provision Admin/Business User, deactivate; write-only initial password field; no self-registration or Viewer. | PRD F01; UI §§2.2,2.3,4.10, UI-AC22/28; API `/admin/users`; SECURITY §6 |
+| PP-038 | BUILD / blocked by taxonomy contract | P0 | 1-2d | PP-005, PP-010, PP-012 | Implement taxonomy-version list/detail/review and immutable draft APIs; validate stable logical defect identity and version metadata without hard-coding candidate codes. | PRD F06, AC05; UI §4.10/UI-AC20; API `/admin/taxonomies`; AI_SPEC; DEC DAI-04/05 |
+| PP-039 | BUILD / activation gated by approved taxonomy | P0 | 0.5-1d | PP-005, PP-038 | Implement reviewed taxonomy activation/deactivation audit and atomic active-version switch; reject unreviewed/unapproved or invalid versions. | PRD F06, AC05; UI §4.10; API taxonomy activation; DATA_MODEL taxonomy; DEC DAI-04 |
+| PP-040 | BUILD / blocked by UI choices | P0 | 1.5-2d | PP-001, PP-010, PP-038, PP-039 | Build Admin taxonomy screen for version list/detail/review/draft/activation; display active values only from the server's active approved version. | PRD F06; UI §4.10/UI-AC20/23; API taxonomy; AI_SPEC; DATA_MODEL taxonomy |
+| PP-041 | BUILD / IR after PP-010/012; calibration-independent | P0 | 1-2d | PP-010, PP-012 | Implement Admin versioned detection-rule list/detail/review and immutable draft APIs using the approved contract. Preserve candidate values and provenance; drafting/review has no incident or notification effect and does not activate a rule. | PRD F08, AC09/20/21; API `/admin/detection-rules`; UI §4.10; DETECTION_SPEC; DATA_MODEL; DEC PB-01/09 |
+| PP-043 | BUILD / IR after PP-001/010/012/041; calibration-independent | P0 | 1.5-2d | PP-001, PP-010, PP-012, PP-041 | Build Admin detection-rule list/detail/review/draft UI. Show server-provided calibration/activation state and keep drafts visibly inactive; do not wait for calibration to expose draft management. | PRD F08; UI §4.10/UI-AC21/23; API detection rules; DETECTION_SPEC; DATA_MODEL |
+| PP-044 | BUILD / blocked by alert and address decisions | P0 | 1.5-2d | PP-003, PP-008, PP-010, PP-012 | Implement managed sandbox/capture recipient directory and group/membership APIs with historical membership and deactivation; no free-form sends. | PRD F11/F12, AC10-14; API recipients/groups/members; UI §4.10; ALERT_SPEC §§6,10; SECURITY §11; DEC SEC-03 |
+| PP-028 | BUILD / blocked by alert decisions | P0 | 2-3d | PP-008, PP-024, PP-026, PP-044 | Implement incident-scoped manual preview/confirmation, authorized directory recipients, idempotency, audit, and abandoned-preview no-send behavior. | PRD F12, AC13/14; ALERT_SPEC §§5,9; API preview/confirm; UI §4.7; DEC SEC-03 |
+| PP-045 | BUILD / routing activation blocked by alert decisions | P0 | 1.5-2d | PP-008, PP-044 | Implement immutable versioned notification-route drafts and audited lifecycle/activation guard; do not choose precedence, fallback, or route keys locally. | PRD F11/F14, AC10/11; API `/admin/notification-rules`; UI §4.10; ALERT_SPEC §§6,10; DATA_MODEL routes |
+| PP-046 | BUILD / blocked by alert and UI decisions | P0 | 2d | PP-001, PP-010, PP-044, PP-045 | Build Admin recipient/group/membership/routing screens, showing only approved sandbox/capture recipients and server-provided route state; no real-send setup. | PRD F11/F12/F14; UI §4.10/UI-AC21/23; API recipient/group/rule routes; ALERT_SPEC §6 |
+| PP-048 | BUILD / blocked by mapping contract | P0 | 1.5-2d | PP-001, PP-010, PP-012, PP-036 | Build Admin source/mapping conflict queue, detail and resolution UI; distinguish conflict review from linkage state and never resolve by guessing. | PRD AC03/19/23; UI §4.9/UI capability matrix; API conflict endpoints; DAI-01/02 |
+| PP-049 | BUILD / ops values gated | P0 | 1.5-2d | PP-010, PP-018, PP-035 | Build Admin operations view and source coverage/status summaries: job age/depth/failure, retries, coverage, freshness, cost/usage and safe diagnostics. | PRD F15, AC16; UI §§4.9-4.10,7; API `/admin/operations/summary`, `/admin/source-coverage`, `/readiness`; DEC ARC-08, OPS-04/05 |
+| PP-009 | DEC / blocked until dev evidence | P0 | 1-2d | PP-016, PP-017, PP-022, PP-060 | Resolve EV-01/02/03, cost denominator and comparator protocol; approve held-out support/gates before holdout lock. | PRD §§14-15, AC17; EVALUATION_PLAN; DEC EV-01-05; AI_SPEC; DETECTION_SPEC |
+| PP-042 | BUILD / activation gated by calibration and evaluation approvals | P0 | 0.5-1d | PP-009, PP-041, PP-060 | Implement the activation endpoint guard. Reject activation until PB-01 and DAI-06 approvals and applicable EV-01/02/03 evaluation approvals are recorded; audit successful activation and never supply unapproved defaults. | PRD F08, AC09/20/21; API detection-rule activation; UI-AC21; DETECTION_SPEC; DEC PB-01, DAI-06 |
+| PP-025 | BUILD / gated by approved rule activation and calibration | P0 | 1.5-2.5d | PP-009, PP-022, PP-023, PP-041, PP-042, PP-060 | Apply only approved current results from an Admin-configured, activated rule version to create/update/reopen incidents idempotently; require the PB-01/DAI-06 and applicable evaluation gates, and fail closed when the rule is inactive. Persist detection evidence and incident history transactionally. | PRD F08/F11/F13, AC09/12/20-22; ALERT_SPEC §§3-4; API detection/incident; DATA_MODEL; DEC PB-03/09, ARC-07 |
+| PP-027 | BUILD / blocked by alert and calibration gates | P0 | 2-3d | PP-008, PP-025, PP-026, PP-044, PP-045 | Implement automatic outbox/cooldown/escalation and delivery recovery under approved rules; atomic incident/outbox transaction, honest status, no resend of unknown outcome. | PRD F11/F14, AC10/11; ALERT_SPEC §§4,8-10; API notifications; DATA_MODEL outbox; DEC PB-04, ARC-07, OPS-02 |
+| PP-047 | BUILD / blocked by audit-scope decision | P0 | 1.5-2d | PP-003, PP-012, PP-038, PP-039, PP-040, PP-041, PP-042, PP-043, PP-044, PP-045, PP-046 | Implement append-only audit events for user, taxonomy, detection-rule, recipient/group/routing configuration changes and a safe paginated Admin history view. | PRD F01/F13; UI §4.10; API `/admin/audit-events`; SECURITY §12; DATA_MODEL audit; DEC SEC-02 |
+| PP-050 | EVAL / blocked by EV decisions | P0 | 1-2d | PP-009, PP-011 | Create and lock held-out manifest/data using approved grouping and support rules; document custody and consume-on-tuning rule. | PRD §§7.4,14-15; EVALUATION_PLAN; DEC EV-01/02/03 |
+| PP-051 | EVAL / blocked by locked holdout | P0 | 2-3d | PP-016, PP-017, PP-022, PP-050 | Implement the evaluation runner and report for approved classification, source/link, detection, lead-time, cost and latency measures; report uncertainty/support honestly. | PRD F16, AC17; EVALUATION_PLAN; AI_SPEC §15; DETECTION_SPEC; DEC EV-01-05 |
+| PP-055 | CAPSTONE / design evidence | P0 | 1-2d | PP-001, PP-010 | Complete/update BRD with acceptance criteria and solution design so they match approved architecture, decisions, and final implementation. | PRD §14.1; PRD §§16-18; ARCHITECTURE; TECH_STACK; DECISION_REGISTER |
+| PP-061 | BUILD / activation UI gated by PP-042 | P0 | 0.5-1d | PP-001, PP-042, PP-043 | Add the Admin activation control and pending-state presentation. Enable activation only when the server reports all approved PB-01, DAI-06, and applicable evaluation prerequisites; submit through the guarded API and display persisted server state. | PRD F08, AC09/20/21; UI Section 4.10/UI-AC21/23; API detection-rule activation; DETECTION_SPEC; DEC PB-01, DAI-06, EV-01/02/03 |
+| PP-031 | SEC / blocked by Admin/alert decisions | P0 | 1.5-2d | PP-003, PP-008, PP-027, PP-028, PP-037, PP-038, PP-039, PP-040, PP-041, PP-042, PP-043, PP-044, PP-045, PP-046, PP-047, PP-048, PP-049, PP-061 | Verify backend authorization and audit for all Admin configuration, recipient/routing activation gates, preview/confirm, idempotency, sandbox-only delivery and safe histories. | SECURITY §§5,11-15; UI §§2,4.7,4.10,8; ALERT_SPEC §§15-17; API Administration/Notifications |
+| PP-052 | EVAL / blocked by approved quality gates | P0 | 1-2d | PP-001, PP-029, PP-030, PP-031, PP-051 | Configure the local verification checklist to report only approved gates; capture exact-revision checklist evidence and a deliberately failing automated test followed by restored-pass evidence. | PRD v1.7 F16, §14.1, AC17; EVALUATION_PLAN; DEC ARC-06, EV-01/02/03 |
+| PP-053 | DEPLOY / late; blocked by target and ops decisions | P0 | 2-4d | PP-002, PP-007, PP-008, PP-049, PP-052 | Deploy one non-production instance with API and one worker, TLS/secrets, persistent local SQLite/artifacts, health checks and monitoring; verify restart/redeploy. | PRD F15, AC18; ARCH §17; SECURITY §15; DEC OPS-01/02/03/05/06; ARC-04/08 |
+| PP-054 | DEPLOY / late; blocked by deployed target | P0 | 1.5-2d | PP-007, PP-053 | Demonstrate coherent SQLite/artifact backup and restore, integrity/hash checks, rollback to prior healthy app version, health verification, and solo runbook. | PRD AC18 and §14.1; ARCH §§17; SECURITY §§9,15; DEC OPS-03/05/06 |
+| PP-056 | CAPSTONE / review evidence | P0 | 0.5-1d | PP-032, PP-052 | Assemble AGENTS.md alignment, Codex review log, ticket/acceptance traceability index and links to completed evidence. | AGENTS.md; PRD §14.1; PRD AC01-24; implementation backlog |
+| PP-057 | CAPSTONE / security evidence | P0 | 0.5-1d | PP-029, PP-030, PP-031 | Produce security triage with findings, dispositions, injection-test evidence (including formula CSV and prompt injection), and residual approved limitations. | PRD §14.1; SECURITY §§14-17; EVALUATION_PLAN SEC-P01-05 |
+| PP-058 | CAPSTONE / final | P0 | 1-2d | PP-051, PP-052, PP-054, PP-055, PP-056, PP-057 | Prepare the required 5-6-slide presentation and rehearse the live end-to-end demo, including health, rollback, security, and evaluation evidence. | PRD §14.1 and §18; AC17/18; EVALUATION_PLAN; SECURITY |
+| PP-059 | BUILD / Admin activation and end-to-end integration gate | P0 | 1-2d | PP-009, PP-024, PP-025, PP-027, PP-028, PP-041, PP-042, PP-043, PP-045, PP-046, PP-047, PP-060, PP-061 | Verify the Admin flow to create/review a detection-rule draft, observe pending gates, activate only after approved prerequisites, then exercise detection -> incident -> automatic/manual sandbox notification. Verify duplicate/cooldown/recurrence behavior, configuration audit, and fail-closed behavior when any approval is absent. | PRD AC09-15/22; ALERT_SPEC; DETECTION_SPEC; API notification/incident/admin routes; UI §§4.5-4.7 |
+
+### 8.1 Required ticket classifications
+
+- **Decision-resolution:** PP-001 through PP-009 plus PP-060. PP-002 is intentionally an early suitability decision; PP-009 and PP-060 wait for development evidence. Decision work is not implementation approval.
+- **Implementation Ready after dependencies:** PP-010 is Implementation Ready because PP-001 is Done and no unresolved decision blocks its scoped runtime and local verification baseline. It does not choose SQLite busy-timeout or worker lease/retry/recovery values; PP-007 retains those decisions. PP-011 and PP-023, plus other `IR after` tasks, remain contingent on PP-010 and their listed prerequisites. PP-010 still needs inclusion in an approved bounded milestone and a fresh readiness check before implementation; the milestone approval does not waive dependency checks.
+- **Blocked by pending decisions:** tickets that name auth, parser/mapping, taxonomy/model, calibration, alert/provider/routing, evaluation, or operational decisions in their readiness/dependencies. PP-041/043 draft management is calibration-independent; PP-042/061 activation, PP-025 incident-producing application, and notification sends remain gated until approvals close.
+- **Evaluation:** PP-009 (decision resolution), PP-050 (holdout), PP-051 (runner/report), PP-052 (local checklist and failure/restoration evidence). Final quality gates stay unset until approved; PP-052 remains blocked by EV quality-gate dependencies.
+- **Deployment:** PP-002 (early target suitability decision only), PP-053 and PP-054 (actual deploy, backup/restore, rollback near the end).
+- **Split large work:** PP-014 covers only one valid confirmation; PP-034/035 add partial acceptance/report and job status/retry. PP-029/030/031 split security reviews by boundary. PP-032/059 split the two end-to-end flows. PP-041/043 cover draft management separately from gated activation PP-042/061. Capstone evidence is separated across PP-055 through PP-058 rather than one omnibus ticket.
+
+### 8.2 P0 feature-to-ticket coverage
+
+| P0 feature | Mapped tickets |
+|---|---|
+| F01 Login, session handling and RBAC | PP-003, PP-012, PP-029, PP-037, PP-047 |
+| F02 Admin-only CSV upload and validation | PP-004, PP-013, PP-034 |
+| F03 Import status, error report and retry | PP-014, PP-034, PP-035, PP-036, PP-048 |
+| F04 Historical Batch classification | PP-017, PP-018, PP-033, PP-032 |
+| F05 Incremental Responses classification | PP-016, PP-018, PP-033, PP-032 |
+| F06 Strict-schema classification and taxonomy | PP-005, PP-016, PP-033, PP-038, PP-039, PP-040 |
+| F07 Product/supplier/batch/source linkage | PP-015, PP-036, PP-048 |
+| F08 Rule-based emerging-defect detection | PP-022, PP-025, PP-041, PP-042, PP-043, PP-060, PP-061 |
+| F09 Auto-refresh overview/filtering | PP-019, PP-020 |
+| F10 Product/defect detail and original-feedback drill-down | PP-021, PP-024 |
+| F11 Automatic warning creation and email | PP-008, PP-025, PP-026, PP-027, PP-044-047, PP-059, PP-060 |
+| F12 Manual alert email preview/confirmation | PP-008, PP-026, PP-028, PP-044-047, PP-059 |
+| F13 Warning lifecycle and audit | PP-023-025, PP-047, PP-059 |
+| F14 Alert deduplication and cooldown | PP-008, PP-025, PP-027, PP-041-046, PP-059 |
+| F15 Processing health/freshness/failure indicators | PP-010, PP-019, PP-020, PP-028, PP-035, PP-049, PP-053 |
+| F16 Evaluation, baseline comparison and local automated verification | PP-009, PP-050-052 |
+| F17 Basic incident investigation notes | PP-024, PP-047, PP-059 |
+
+### 8.3 Acceptance-criterion-to-ticket coverage
+
+| Criterion | Mapped tickets |
+|---|---|
+| AC01 | PP-012, PP-029, PP-030, PP-031 |
+| AC02 | PP-013, PP-014, PP-016, PP-018, PP-032 |
+| AC03 | PP-013, PP-034, PP-036, PP-048 |
+| AC04 | PP-014, PP-017, PP-025, PP-035 |
+| AC05 | PP-005, PP-016, PP-033, PP-038-040 |
+| AC06 | PP-016, PP-030 |
+| AC07 | PP-017, PP-018, PP-032 |
+| AC08 | PP-016, PP-019, PP-020, PP-032 |
+| AC09 | PP-022, PP-025, PP-041-043, PP-059, PP-060 |
+| AC10 | PP-008, PP-027, PP-044-046, PP-059 |
+| AC11 | PP-008, PP-027, PP-044-046, PP-059 |
+| AC12 | PP-021, PP-024, PP-025 |
+| AC13 | PP-008, PP-028, PP-044-047, PP-059 |
+| AC14 | PP-028, PP-030, PP-059 |
+| AC15 | PP-023, PP-024, PP-047, PP-059 |
+| AC16 | PP-019, PP-020, PP-035, PP-049 |
+| AC17 | PP-009, PP-050-052 |
+| AC18 | PP-002, PP-053, PP-054 |
+| AC19 | PP-015, PP-021, PP-036, PP-048 |
+| AC20 | PP-022, PP-041-043, PP-059, PP-060 |
+| AC21 | PP-022, PP-027, PP-042, PP-043, PP-059, PP-060, PP-061 |
+| AC22 | PP-023-025, PP-059 |
+| AC23 | PP-013, PP-034, PP-036, PP-048 |
+| AC24 | PP-016, PP-019, PP-020, PP-032 |
+
+## 9. Deployment, monitoring, backup, and rollback
+
+Provider suitability is assessed in Phase 0 / PP-002, and the decision must be approved before deployment work. Actual deployment remains a late milestone. The proposed Linux VM/Docker Compose topology is not approved by this plan; only the approved logical architecture is fixed.
+
+- Deploy one non-production instance with one FastAPI API and one separate worker sharing one persistent local SQLite database and protected artifact directory. No multiple active instances or network filesystem.
+- Keep TLS, secrets, least-privilege storage, and upload/report artifacts outside public/static delivery. Keep frontend/API origins consistent with the approved cookie/CORS design.
+- Monitor process health separately from role-visible readiness; expose safe job age/depth, failures, retry counts, source coverage, last successful import/classification/detection, staleness, notification state, usage/cost, provider availability, and measurable SQLite contention.
+- Runbook covers startup/shutdown, stuck work, eligible retry, unknown notification outcome, storage capacity, usage review, backup/restore, reset/reseed, incident response, and rollback.
+- Back up SQLite and referenced artifacts as one coherent recovery set. Use an approved SQLite-consistent procedure or quiesce API/worker/artifact mutations and handle WAL consistently. Do not copy only the main DB file during active WAL writes.
+- Restore while both processes are stopped from the same recovery set; verify DB integrity/foreign keys and every referenced artifact/hash before restart. Demonstrate app rollback and health checks on the non-production target. Application rollback does not reverse a schema change.
+- Exact retention, backup cadence, and mechanism remain gated by OPS-03. Do not invent automatic artifact purge behavior.
+
+## 10. Risks, scope boundaries, and MVP completion criteria
+
+### Main risks and controls
+
+| Risk | Control |
+|---|---|
+| Pending decisions stall dependent work or become accidental defaults. | Use per-ticket gates; keep decision IDs/status visible; advance independent foundations only. |
+| Scope overwhelms a solo developer. | Work one vertical slice at a time; keep tickets small, estimated, testable, and dependency-ordered; defer only explicitly P1/P2 scope. |
+| Classification attempts or coverage are counted incorrectly. | Resolve authoritative-attempt and DAI-06 policies before counts/activation; keep immutable attempts, coverage truth, and unknown/incomplete states. |
+| Source/mapping conflicts are mistaken for linkage reconciliation. | Separate PP-036/048 conflict review from PP-015 linkage corrections; no overwrite or guessed mapping. |
+| SQLite contention or crash creates duplicate work. | One durable worker, short transactions, approved leases/retries, idempotency, restart/recovery tests, coherent DB/artifact restore. |
+| Formula payloads execute from downloaded rejection reports. | Escape every user-controlled report cell and test P0 report bytes under SEC-AC15; do not defer this as P1 export work. |
+| Notification replay or incorrect routing sends unintended mail. | Approved route/sink first, sandbox/local capture only, atomic outbox, explicit confirmation, idempotency, conservative unknown-outcome recovery. |
+| Held-out leakage inflates evaluation. | Approve protocol first, lock manifest, record versions/config, and consume a holdout if it guides changes. |
+| Workshop deliverables are omitted at release. | Trace each PRD §14.1 artifact to PP-050-058 and acceptance evidence. |
+
+### Scope boundaries
+
+- One synthetic fashion/apparel retailer; 10,000 synthetic feedback records and at least 35 days of development event-time coverage. No real customer, client, C5i, PII, or PHI data.
+- Admin and Business User only. No Viewer, SSO, public self-registration, multi-tenancy, watched-folder ingestion, P1 report export, owner assignment, financial impact, advanced forecasting, or natural-language assistant.
+- OpenAI classification is backend-only. Defect calculations, detection thresholds, severities, authorization, and alert eligibility use deterministic backend logic.
+- Internal/sandbox/capture directory only; no real external or supplier email. One API, one SQLite database file, one separate worker, one active non-production instance, protected local artifacts. No broker, Redis, Celery, Kafka, extra database, or horizontal scaling.
+- Keep detection activation, incident-producing current results, and automatic notifications disabled until attempt-authority, coverage/calibration, evaluation, detection-specification, route/provider, and alert gates are approved. Manual notification also waits for its approved provider/directory/token gates. A milestone approval never satisfies these gates; runtime behavior stays fail-closed.
+
+### MVP completion criteria
+
+MVP is complete only when all of the following are accepted:
+
+1. All PRD P0 F01-F17 are implemented, including the complete Admin settings surface required by UI_SPEC: user management; taxonomy review/draft/activation; detection-rule review/draft/activation; recipient/group/routing management; configuration audit history; source/mapping conflict review and explicit resolution, separate from linkage reconciliation.
+2. AC01-AC24 have recorded evidence. P0 rejection reports are downloadable and formula-injection safe. No P0 behavior is dropped to simplify the backlog.
+3. Responses and Batch classification both use the durable worker and approved common model/schema contract; linkage, dashboard, drill-down, freshness, incidents, notes, audit, and both sandbox notification paths meet approved behavior.
+4. Backend authorization, security criteria, injection tests, source/link integrity, idempotency, failure recovery, and safe CSV/report handling are complete. No secrets or sensitive customer data are introduced.
+5. Pending taxonomy, detection, coverage, routing, notification, and evaluation gates are approved before activation or final claims. The local pre-merge checklist records only approved gates; the deliberate failure/restoration demonstration is complete with evidence.
+6. The selected non-production target passes health, monitoring, coherent backup/restore, and rollback demonstration.
+7. PRD §14.1 artifacts are reviewable: BRD with ACs, solution design, this task plan, AGENTS.md, Codex review log, evaluation dataset/report, security triage, injection tests, non-production deployment, health checks, rollback evidence, operating runbook, and 5-6-slide presentation with live demo.
+
+## 11. Consistency validation and remaining blockers
+
+This revision was checked against AGENTS.md and PRD v1.7, DECISION_REGISTER v1.7, TECH_STACK v1.0, ARCHITECTURE v1.4, DATA_MODEL v1.4, API_SPEC v1.4.0, AI_SPEC v1.0, DETECTION_SPEC v1.1, ALERT_SPEC v0.2, UI_SPEC v0.3, SECURITY v1.0, and EVALUATION_PLAN v0.4.
+
+**Planning corrections:** the backlog is stable-ID topologically ordered; Admin detection-rule draft/list/review work is separate from activation and does not depend on calibration; PP-042 and PP-061 activation remain gated by PP-060 PB-01/DAI-06 approval and PP-009 applicable evaluation approvals; PP-025 requires the Admin rule configuration and activation path; PP-059 verifies that path end to end, including audit; and PP-019 allows approved dashboard metrics to proceed while undefined PB-05 KPI values remain null/PENDING_DEFINITION.
+
+**Dependency validation:** every dependency reference resolves, the graph is acyclic, and each prerequisite appears before its dependent ticket. PP-018 precedes PP-016/017; PP-033 follows PP-011 and precedes both classification workflows. PP-022 shadow evidence precedes PP-060; PP-060 and PP-009 precede PP-042/061; PP-041 precedes both draft UI PP-043 and activation PP-042; PP-042 precedes PP-025; PP-059 follows the Admin draft/review/activation UI, configuration audit, incident, and notification paths. PP-002 is early provider suitability only; PP-053/054 perform deployment and rollback late.
+
+**Coverage validation:** the crosswalk maps each P0 F01-F17 to at least one ticket and every AC01-AC24 to at least one ticket. It includes Admin configuration, separate source/mapping conflict review, and the SECURITY SEC-AC15 formula-injection test for the P0 rejection-report download.
+
+**Remaining blockers are specification/approval decisions, not omitted planning work:**
+
+- PP-001 is Done; PRD change RC-01 approves local verification and pre-merge evidence, and GitHub Actions/hosted CI are excluded. PP-002 approved deployment target. Other PP-001 tooling selections are recorded in TECH_STACK v1.0 and DECISION_REGISTER v1.7.
+- PP-003 authentication/session/security parameters and audit scope; PP-004 parser/normalization/report details and mapping-conflict application semantics.
+- PP-060 exact PB-01/DAI-06 values and approval; DETECTION_SPEC v1.1 remains Draft. Activation and incident-producing use stay gated.
+- PP-006 metric definitions; unresolved PB-05 KPIs remain null/PENDING_DEFINITION while independent dashboard metrics may proceed.
+- PP-007 worker retry/lease and OPS-03 retention/backup parameters.
+- PP-008 ALERT_SPEC approval, route/fallback/sink/provider, preview lifecycle, and recovery edge behavior. No real email is approved.
+- PP-005 initial taxonomy seed and authoritative completed-attempt rule, then PP-033 model ID/input overflow policy, must be aligned in AI_SPEC/DATA_MODEL/DETECTION_SPEC before classification counting.
+- PP-009 EV-01/02/03 and final evaluation protocol; PP-042/061 remain gated on the applicable recorded approvals, and no final held-out gate is approved.
+
+Unresolved decisions continue to gate only their dependent implementation or activation. Decision-resolution tickets PP-002 through PP-008 can proceed according to their scopes. PP-001 is Done. PP-010 is Implementation Ready because its explicit dependency is complete, its runtime scope uses approved technologies and local verification tools, and no unresolved decision blocks that scoped work. PP-010 does not set the SQLite busy timeout or worker lease/retry/recovery values assigned to PP-007, and it does not depend on held-out evaluation calibration, authentication policy details beyond its skeleton boundary, or a hosted CI service. Dependent tickets retain their own readiness gates. Any implementation still requires an approved bounded milestone. PP-011 and PP-023 follow the runtime foundation. PP-041/043 draft management does not wait for calibration but still waits for its tool/auth prerequisites.
