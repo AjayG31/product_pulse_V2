@@ -1,11 +1,12 @@
 # ProductPulse Architecture Specification
 
-**Version:** 1.4  
+**Version:** 1.5  
 **Status:** Approved  
 **Requirements source:** [PRD](PRD.md) v1.7  
-**Decision sources:** [Decision Register](DECISION_REGISTER.md) v1.7 and [Tech Stack](TECH_STACK.md) v1.0  
-**Data Model:** [DATA_MODEL.md](DATA_MODEL.md) v1.4 Approved — Design Baseline (conditional); v1.1 was the previous approved baseline  
+**Decision sources:** [Decision Register](DECISION_REGISTER.md) v2.0 and [Tech Stack](TECH_STACK.md) v1.2.0  
+**Data Model:** [DATA_MODEL.md](DATA_MODEL.md) v1.5.2 Approved — Design Baseline (conditional); v1.5.1 was the previous approved baseline  
 **Approval date:** 21 November 2026
+**PP-007 operational clarification approval:** 22 November 2026
 
 ## 1. Purpose and approval boundary
 
@@ -31,7 +32,7 @@ ProductPulse is a single-retailer product-quality monitoring application for a s
 - The approved implementation choices are React + TypeScript with Recharts, one FastAPI backend, SQLite as the only primary relational database, one separately running worker, OpenAI Responses API for incremental classification, Batch API for historical backlogs, and an email sandbox or local capture adapter.
 - The API and worker use the same SQLite database file on one active application instance. The file resides on persistent local storage that survives restarts/redeployments and is accessible to both processes. Do not assume a network filesystem or multiple application instances.
 - The non-production deployment, health checks, protected secrets, logs/usage visibility, runbook, and demonstrated rollback are PRD requirements. A single Linux VM running Docker Compose is the preferred proposed OPS-01 topology; the hosting provider remains unselected and the topology remains Proposed.
-- Secure email/password authentication with server-side sessions is approved under SEC-01. Exact session configuration and account recovery remain for `SECURITY.md`. ORM, migration tool, test tooling, frontend asset delivery, and several operational parameters are unresolved as listed in §19.
+- Secure email/password authentication with server-side sessions is approved under SEC-01. Exact session configuration and account recovery remain for `SECURITY.md`. SQLAlchemy 2.x/Alembic 1.x and local test tooling are approved; frontend asset delivery, provider selections, and remaining operational parameters are listed in §19.
 
 ### MVP boundaries
 
@@ -96,7 +97,7 @@ Logical backend responsibilities are:
 7. **Incident and notification services:** validate incident transitions, audit actions, create outbox requests, and return current notification state.
 8. **Persistence access:** read/write the shared SQLite file with short transactions and the connection settings in §6.
 
-The PRD's `GET /dashboard/summary`, `GET /dashboard/trends`, product, feedback, incident, notification, Admin ingestion/settings, and `/health` routes are the starting surface. `API_SPEC.yaml` v1.4.0 (Approved — Design Baseline, conditional; v1.1.0 was the previous approved version) defines upload preview/confirmation, job/status/retry, notification recovery, downloadable rejection-report, and Admin reconciliation contracts, including immutable preview identity and verified file-hash binding. This document does not define endpoint paths or request/response schemas. The frontend must not be trusted to enforce role scope or confirmation rules.
+The PRD's `GET /dashboard/summary`, `GET /dashboard/trends`, product, feedback, incident, notification, Admin ingestion/settings, and `/health` routes are the starting surface. `API_SPEC.yaml` v1.5.2 (Approved — Design Baseline, conditional; v1.5.1 was the previous approved version) defines upload preview/confirmation, job/status/retry, notification recovery, downloadable rejection-report, and Admin reconciliation contracts, including immutable preview identity and verified file-hash binding. This document does not define endpoint paths or request/response schemas. The frontend must not be trusted to enforce role scope or confirmation rules.
 
 Provider credentials remain on the backend in protected server-side configuration. Health and Admin status views expose processing state without returning secrets or raw feedback in telemetry.
 
@@ -104,7 +105,7 @@ Provider credentials remain on the backend in protected server-side configuratio
 
 SQLite is the only primary relational database. One persistent database file holds the PRD's logical entities, including users, products, suppliers, batches, ingestion jobs, feedback, classifications, source coverage, conflicts, clusters, incidents, incident events, notifications/outbox state, and audit logs. This section describes logical responsibilities, not a physical schema or migration.
 
-`DATA_MODEL.md` v1.4 is the Approved — Design Baseline, subject to documented conditions; it includes detection, alert-recovery, and DAI-08 mapping fields. It defines the exact persisted fields, types, nullability, constraints, foreign keys, and indexes, including the durable classification-to-job relationship and Batch input-file recovery identifier. `API_SPEC.yaml` v1.4.0 (Approved — Design Baseline, conditional; v1.1.0 was the previous approved version) defines the endpoint contracts that expose or update these records.
+`DATA_MODEL.md` v1.5.2 is the Approved — Design Baseline, subject to documented conditions; it includes detection, alert-recovery, DAI-08 mapping, and PP-007 worker-policy details. It defines the exact persisted fields, types, nullability, constraints, foreign keys, and indexes, including the durable classification-to-job relationship and Batch input-file recovery identifier. `API_SPEC.yaml` v1.5.2 (Approved — Design Baseline, conditional; v1.5.1 was the previous approved version) defines the endpoint contracts that expose or update these records.
 
 ### Integrity and traceability
 
@@ -117,7 +118,7 @@ SQLite is the only primary relational database. One persistent database file hol
 ### SQLite connection and transaction rules
 
 - Enable `PRAGMA foreign_keys=ON` on **every** database connection.
-- Use WAL mode where supported. Configure an explicit busy timeout for database connections; its duration is unresolved.
+- Use WAL mode where supported. Set a 5-second busy timeout on every relevant connection. After a timed-out `SQLITE_BUSY`, roll back and retry the same idempotent database unit up to 2 additional times; this is separate from durable-job retry delays.
 - SQLite serializes writes: WAL can support reader/writer coexistence where supported, but it does not allow multiple simultaneous writers. API requests and the worker can contend for the one writer slot.
 - Keep all write transactions short. A transaction may validate/claim/persist internal database state, then must commit before network I/O. Never hold a SQLite transaction open while calling OpenAI or the email provider. After the external call, open a new short transaction to persist the outcome.
 - Use relational uniqueness, foreign keys, and conditional/idempotent updates rather than database-specific locking features. Do not assume advisory locks, `SKIP LOCKED`, JSONB, or another database.
@@ -125,7 +126,7 @@ SQLite is the only primary relational database. One persistent database file hol
 
 ### Concurrent-write and scaling limit
 
-The API and the worker share a single SQLite writer. Short transactions and a busy timeout reduce avoidable contention; they do not remove the single-writer limit. Measure the unchanged PRD p95 and processing-latency targets with API and worker writes active. Lock-contention policy and numeric timeout are unresolved under ARC-03/ARC-04. Horizontal scaling and multi-instance access are outside this MVP boundary.
+The API and the worker share a single SQLite writer. Short transactions and the approved busy policy reduce avoidable contention; they do not remove the single-writer limit. Measure the unchanged PRD p95 and processing-latency targets with API and worker writes active. Horizontal scaling and multi-instance access are outside this MVP boundary.
 
 ## 7. Admin-only CSV ingestion
 
@@ -138,7 +139,7 @@ The Admin Console and ingestion service implement the PRD's manual upload flow:
 5. At confirmation, the Admin selects `HISTORICAL_BATCH` or `INCREMENTAL_RESPONSES` for a review/return import; reference-data imports have no processing mode. Confirmation creates durable import-job state containing the immutable mode. The worker processes the import and reports queued/running/completed/partial/failed status and counts for the Admin. Preserve the upload file hash, uploading actor, relevant timestamps, job ID, accepted/rejected counts, linkage status, and reconciliation audit trail.
 6. After newly accepted feedback is persisted, automatically queue classification through the mode's corresponding OpenAI API. The worker uses Batch API for `HISTORICAL_BATCH` and Responses API for `INCREMENTAL_RESPONSES`; no separate user-triggered classification action is required. The Admin can inspect failures and retry eligible work, preserving the original mode and source identities.
 
-`DATA_MODEL.md` v1.4 is the Approved — Design Baseline, subject to its documented conditions. It owns exact persistence field names and constraints for upload/report artifact IDs and metadata, preview identity and mapping, verified hash, job metadata, row rejection details, linkage status, and classification/Batch recovery traceability. DAI-08 approves the Admin mapping semantics, which are included in this baseline. OPS-06 approves protected local filesystem artifacts, atomic publication before the SQLite reference, orphan reconciliation, and a joint database/artifact recovery set. `API_SPEC.yaml` v1.4.0 (Approved — Design Baseline, conditional; v1.1.0 was the previous approved version) owns the endpoint contracts for preview creation, hash-bound confirmation, downloadable row-level rejection reports, job/status/retry operations, and Admin reconciliation. Artifact expiry/retention remains a downstream operations detail.
+`DATA_MODEL.md` v1.5.2 is the Approved — Design Baseline, subject to its documented conditions. It owns exact persistence field names and constraints for upload/report artifact IDs and metadata, preview identity and mapping, verified hash, job metadata, row rejection details, linkage status, and classification/Batch recovery traceability. DAI-08 approves the Admin mapping semantics, which are included in this baseline. OPS-06 approves protected local filesystem artifacts, atomic publication before the SQLite reference, orphan reconciliation, and a joint database/artifact recovery set. PP-007 approves capstone-period synthetic artifact retention without automatic expiry. `API_SPEC.yaml` v1.5.2 (Approved — Design Baseline, conditional; v1.5.1 was the previous approved version) owns the endpoint contracts for preview creation, hash-bound confirmation, downloadable row-level rejection reports, job/status/retry operations, and Admin reconciliation.
 
 Business Users cannot upload, preview, confirm, or retry ingestion. A direct API attempt returns `403` and creates no stored file or job. Classification dispatch follows the immutable mode selected by an Admin; there is no Business User ingestion or retry control. Identical `(source_type, source_record_id)` plus identical payload is a no-op, including within an upload. A differing payload is an Admin-visible conflict; it never overwrites source text. Partial row acceptance is supported (DAI-01/DAI-02). Supplier/batch references are taken from valid rows or explicit mappings; conflicting mappings are surfaced for review rather than guessed.
 
@@ -146,21 +147,21 @@ Business Users cannot upload, preview, confirm, or retry ingestion. A direct API
 
 One separately running worker polls the same SQLite file used by the API. It handles durable ingestion/classification work, Batch API submission/result collection, detection recomputation/reconciliation, and notification outbox delivery. It is not an in-process background task tied to a user's request and does not require a broker.
 
-The approved behavior is durable state, bounded retries for transient provider errors, terminal failure visibility, Admin retry where permitted, idempotency, and scheduled reconciliation. Under DAI-07, confirmed feedback imports persist an explicit mode: `HISTORICAL_BATCH` automatically dispatches newly persisted eligible feedback through the OpenAI Batch API; `INCREMENTAL_RESPONSES` uses the Responses API. Reference imports have no mode. Retries preserve the confirmed mode, and no separate classification trigger is exposed to Business Users. Numeric retry/backoff limits and reconciliation cadence remain open under OPS-02.
+The approved behavior is durable state, bounded retries for transient provider errors, terminal failure visibility, Admin retry where permitted, idempotency, and scheduled reconciliation. Under DAI-07, confirmed feedback imports persist an explicit mode: `HISTORICAL_BATCH` automatically dispatches newly persisted eligible feedback through the OpenAI Batch API; `INCREMENTAL_RESPONSES` uses the Responses API. Reference imports have no mode. Retries preserve the confirmed mode, and no separate classification trigger is exposed to Business Users. PP-007 sets the worker poll interval to 5 seconds, reconciliation interval to 60 seconds, and eligible retry delays to 5, 15, then 45 seconds. The PP-014-created classification item remains limited to 3 total claims; other job-type attempt budgets are not defaulted.
 
-### Proposed SQLite-compatible processing pattern
+### Approved SQLite-compatible processing pattern
 
-The following lease-token pattern is a recommendation in the Tech Stack, not a separately approved implementation contract:
+The following lease-token pattern and values are approved under PP-007:
 
 1. Persist the durable job/outbox identity in a short transaction.
-2. The single worker claims an eligible item and records a lease token/expiry in a short write transaction, then commits.
-3. Perform OpenAI/email network I/O with no database transaction held.
-4. Persist the result in a new short transaction, conditioned on the current lease token and stable work identity so a stale worker cannot overwrite newer work.
-5. Persist retry attempt/next eligible time for transient failures; retain terminal failures for Admin visibility/recovery. On restart, make expired leases eligible for recovery and use reconciliation to find stale/incomplete work.
+2. The single worker claims one eligible item in a short `BEGIN IMMEDIATE` transaction and records an owner token and a 5-minute lease, then commits.
+3. Perform OpenAI/email network I/O with no database transaction held. Renew an active lease every 60 seconds, including during a long provider call, through a separate short transaction conditioned on the current owner token.
+4. Persist the result in a new short transaction conditioned on the current lease token and stable work identity. A stale owner cannot overwrite newer work; reject its result write.
+5. Poll every 5 seconds and reconcile at worker startup and every 60 seconds while running. Reconciliation detects expired worker leases, finalizes the abandoned attempt, and clears the old claim. A work item without an approved attempt budget is not eligible for worker claim or automatic replay. For an eligible retry, schedule another attempt only when the outcome is known safe and the work type has an approved budget, using the next eligible 5/15/45-second delay. If the approved budget is exhausted, retain a terminal failure for Admin visibility/recovery. A provider submission with an uncertain outcome must first use the provider-specific correlation/reconciliation contract before another submission.
 
-The notification outbox follows the same short claim/call/record pattern. Whenever an incident state change requires a notification, persist the incident state change and associated outbox event in the same atomic SQLite transaction. If either local database operation fails, roll back the whole transaction so neither may commit without the other. Commit before any email-provider call, and persist the provider outcome in a separate short transaction after the call. All OpenAI and email-provider calls always occur outside database transactions. Provider acceptance is not delivery; exactly-once external email delivery is not promised. `ALERT_SPEC.md` defines expired-notification-lease reconciliation and no automatic resend of OUTCOME_UNKNOWN absent provider verification or an approved policy; external idempotency remains open.
+The notification outbox follows the same short claim/call/record pattern and uses the same 5-minute lease and 60-second renewal policy. Whenever an incident state change requires a notification, persist the incident state change and associated outbox event in the same atomic SQLite transaction. If either local database operation fails, roll back the whole transaction so neither may commit without the other. Commit before any email-provider call, and persist the provider outcome in a separate short transaction after the call. All OpenAI and email-provider calls always occur outside database transactions. Provider acceptance is not delivery; exactly-once external email delivery is not promised. Expired `SENDING` with a still-`QUEUED` attempt returns to `QUEUED`; an abandoned `IN_PROGRESS` attempt becomes `OUTCOME_UNKNOWN` and is never automatically resent absent provider verification or a separately approved policy. Provider-specific notification retry limits, routing, sink selection, and external idempotency remain pending under PP-008.
 
-Background-job lease duration/renewal, atomic job-claim transaction details, `SQLITE_BUSY` retry handling, and numeric retry parameters remain unresolved under ARC-04/OPS-02. Notification lease expiry and uncertain-outcome handling are defined in `ALERT_SPEC.md`; no external provider call is promised exactly once.
+Worker lease duration/renewal, polling, reconciliation, SQLite busy handling, and the common retry-delay sequence are resolved under PP-007. Other job-type attempt budgets remain unassigned. Notification retry limits, routing, sink selection, provider verification, and external idempotency remain gated under PP-008; no external provider call is promised exactly once.
 
 ## 9. OpenAI classification architecture
 
@@ -175,7 +176,7 @@ All OpenAI calls originate from the backend worker through an adapter boundary:
 - **Safety:** feedback is untrusted data; embedded instructions are classified, not followed. The model's severity hint is advisory and cannot set final warning severity.
 - **Traceability/measurement:** persist model, prompt/schema version, token usage, latency, estimated cost, job state, and classification state without exposing API credentials. Track cost per 1,000 records including retries and Batch versus incremental work.
 
-Prompt shape, final schema fields, model ID, cost/rate limits, and exact retry settings are not chosen by this document. Taxonomy changes remain versioned and audited; freeze the initial taxonomy for held-out evaluation. Every classification retains its taxonomy version. A versioned specific issue code maps explicitly to a stable logical defect identifier; semantically equivalent meanings may share that identifier across versions, while a changed meaning receives a new identifier and is never automatically merged. In the MVP, a new taxonomy version applies to new/retried classifications unless a separate historical reclassification job is defined and approved, as specified by DAI-04.
+Prompt shape, final schema fields, model ID, cost/rate limits, and work-type retry budgets beyond the PP-014 classification cap are not chosen by this document. PP-007 fixes the shared 5/15/45-second eligible retry-delay sequence. Taxonomy changes remain versioned and audited; freeze the initial taxonomy for held-out evaluation. Every classification retains its taxonomy version. A versioned specific issue code maps explicitly to a stable logical defect identifier; semantically equivalent meanings may share that identifier across versions, while a changed meaning receives a new identifier and is never automatically merged. In the MVP, a new taxonomy version applies to new/retried classifications unless a separate historical reclassification job is defined and approved, as specified by DAI-04.
 
 ## 10. Product, supplier, batch, and source linkage
 
@@ -271,7 +272,7 @@ Expose or report:
 - OpenAI model/version, token usage, latency, retries, and estimated cost, including cost per 1,000 records.
 - Evaluation metrics, local automated check outcomes, and documented pre-merge checklist evidence.
 
-Operational logs should identify the job, incident, and action needed for investigation while excluding raw feedback and secrets. Validation failures are reported with row-level reasons; transient provider errors use bounded retries; terminal failures remain visible for Admin recovery; permanent input/schema errors are not retried as provider failures. Numeric retry limits and the logging/monitoring product are not selected.
+Use structured, redacted operational logs with safe request/job/incident identifiers, state transitions, error categories, and action needed for investigation. Exclude raw feedback, credentials, tokens, message content, provider payloads, filesystem paths, and raw exception text. Validation failures are reported with row-level reasons; eligible transient errors use bounded retries; terminal failures remain visible for Admin recovery; permanent input/schema errors are not retried as provider failures. OPS-05 selects the existing Admin Console, dashboard freshness indicators, health endpoint, and concise runbook rather than a separate operations product. ARC-08 readiness thresholds and provider-health assessment parameters remain pending.
 
 ## 17. Non-production deployment, persistence, backup, and rollback
 
@@ -281,12 +282,12 @@ Before deployment approval, verify that the selected provider supports the propo
 
 ### Safe SQLite operations
 
-- **Backup:** OPS-06 requires the SQLite database and all referenced artifact files to be captured as one consistent recovery set. Quiesce database writes and artifact publication/deletion while taking the set; use a SQLite-consistent backup mechanism (the SQLite backup API is one acceptable approach), or stop API/worker writes and checkpoint WAL before a coordinated snapshot. Never copy only the main database file during active WAL writes. Exact mechanism, cadence, and retention remain open under OPS-03.
+- **Backup:** OPS-06 requires the SQLite database and all referenced artifact files to be captured as one consistent recovery set. Before each migration and reset/reseed, quiesce API, worker, and artifact publication/deletion; use Python's SQLite `Connection.backup()` API and capture the artifacts from that same quiesced set. Never copy only the main database file during active WAL writes. Deployment-specific periodic backup cadence and backup retention remain open under OPS-03.
 - **Restore:** stop both processes, restore the database and artifact directory from the same recovery set using the documented SQLite-aware procedure, avoid mixing database/sidecar/artifact state from different snapshots, verify database integrity and foreign-key relationships, and verify every referenced artifact exists and matches its stored hash before restarting API and worker.
 - **Reset/reseed:** restrict to the non-production synthetic dataset. Preserve a consistent snapshot first if audit/evaluation evidence must be retained. Stop both processes before replacing/resetting the database file and verify integrity before restart.
 - **Rollback:** retain a compatible recovery snapshot before schema-changing releases. A previous application version does not automatically reverse a schema change. If schema compatibility requires restoring a prior snapshot, stop both processes and follow the restore procedure; disclose that later demo records may be lost. Verify health after both processes restart.
 
-OPS-03 approves the documented recovery/reset expectation but leaves backup cadence, retention, and exact backup mechanism open. The migration tool is also not approved; this architecture does not prescribe migration commands or claim production recovery guarantees.
+OPS-03 approves the development backup trigger and SQLite backup mechanism. Deployment-specific periodic cadence and retention remain open; this architecture does not prescribe migration commands or claim production recovery guarantees.
 
 ## 18. Architectural trade-offs and alternatives
 
@@ -310,11 +311,11 @@ The table records remaining open choices and dependencies, plus cross-document s
 | SEC-01 authentication/session and initial Admin provisioning | Approved approach | Use secure email/password, server-side sessions, protected first-Admin setup, and Admin-managed users; exact session configuration and account recovery belong in `SECURITY.md`. |
 | ARC-02 REST request/response details and preview/confirm route contract | Approved approach; contract open | API table is only the starting surface; do not generate client/server contracts from this document. |
 | ARC-03 ORM and migration tooling | Approved: SQLAlchemy 2.x and Alembic 1.x for SQLite and versioned migrations | Exact compatible package releases are resolved and locked during project setup; SQLite remains the only primary database. |
-| ARC-03/ARC-04 SQLite connection and concurrency parameters | Required constraints documented; exact parameters open | Busy-timeout duration, `SQLITE_BUSY` handling, atomic claim approach, and transaction details need a downstream spec. |
-| ARC-04 job/outbox leases and recovery | One worker and durable SQLite state Approved; notification uncertainty rule defined in ALERT_SPEC | Background-job lease duration/renewal, atomic claim details, stale worker protection, and `SQLITE_BUSY` recovery remain open; notification leases follow ALERT_SPEC's QUEUED/OUTCOME_UNKNOWN reconciliation. |
-| OPS-02 retry and reconciliation parameters | Bounded retries/reconciliation Approved; numeric limits/cadence open | Set provider-aware limits and schedule without weakening visibility or idempotency. |
-| OPS-03 backup/recovery parameters | Recovery/reset expectation Approved; cadence, retention, and mechanism open | Complete runbook details before deployment; no production guarantees. |
-| OPS-06 local artifact storage | Approved | Keep uploaded CSV and rejection-report files in protected persistent local storage shared by API and worker; store opaque IDs/metadata in SQLite, publish atomically, reconcile orphan files, and back up/restore the database and referenced files as one set. Retention/expiry remains open under OPS-03. |
+| ARC-03/ARC-04 SQLite connection and concurrency parameters | PP-007 approved | Use a 5-second busy timeout and up to 2 additional `SQLITE_BUSY` retries after rollback; claim one item atomically and reject stale-owner writes. |
+| ARC-04 job/outbox leases and recovery | PP-007 approved; notification uncertain-outcome rule retained | Use 5-minute leases, renew every 60 seconds including during provider calls, poll every 5 seconds, and reconcile at startup and every 60 seconds. Keep provider calls outside transactions. |
+| OPS-02 retry and reconciliation parameters | PP-007 approved with per-work-type limits preserved | Use the 5/15/45-second retry-delay sequence. PP-014-created classification work remains capped at 3 total claims; other job-type attempt budgets are not defaulted. Provider-specific notification retry limits remain pending under PP-008. |
+| OPS-03 backup/recovery parameters | Development policy approved; deployment schedule deferred | Before each migration and reset/reseed, create a coherent SQLite-plus-artifact backup using `Connection.backup()` with mutations quiesced. Deployment-specific periodic cadence and backup retention remain open; no production guarantee. |
+| OPS-03/OPS-06 artifact retention | Capstone synthetic-artifact policy approved | Retain uploads, previews, row reasons, rejection reports, and audit evidence through the capstone period without automatic per-artifact expiry; cleanup only through documented reset/reseed after backup and reference/audit checks. |
 | OPS-01 provider/topology | Proposed | Linux VM with Docker Compose is the preferred proposed topology; select and verify a provider that supports the shared persistent local SQLite file, protected artifact directory, and required operations before deployment. |
 | DAI-05 OpenAI model identifier | Selection method Approved; model ID open | Evaluate support for both APIs and strict output contract before choosing a model. |
 | ARC-05 email sink/provider and recipient routing details | Adapter/sandbox boundary Approved; specific sink open | Select a local or hosted capture sink and finalize the approved directory/fallback before notification integration. |
@@ -329,14 +330,14 @@ The table records remaining open choices and dependencies, plus cross-document s
 | EV-03 planted-episode recall gate | Pending Calibration | Validate whether the provisional >=90% target is supported by scenario counts. |
 | EV-04 lead-time comparator | Evaluation methodology Approved; comparator method is selected during development and frozen before held-out evaluation | Apply the chosen documented comparator to the identical event-time stream; do not add a user-facing sentiment feature for this evaluation alone. |
 | EV-05 cost reporting | Cost tracking Approved; no spend limit/gate approved | Track model/retry/path cost and report cost per 1,000 records; add no budget gate without explicit confirmation. |
-| Test and frontend tooling | Approved in TECH_STACK v1.0: pytest/FastAPI TestClient, Vitest/React Testing Library, React Router, MUI, TanStack Query, and React state/context | Use the selected packages and repeatable local PowerShell check runner; retain ticket-level test evidence. No Playwright or browser E2E framework is selected. |
+| Test and frontend tooling | Approved in TECH_STACK v1.2.0: pytest/FastAPI TestClient, Vitest/React Testing Library, React Router, MUI, TanStack Query, and React state/context | Use the selected packages and repeatable local PowerShell check runner; retain ticket-level test evidence. No Playwright or browser E2E framework is selected. |
 | ARC-07 incident state/outbox atomicity | Approved; provider verification details open | Incident changes requiring notification and their outbox events commit atomically; `ALERT_SPEC.md` defines expired-lease reconciliation and prohibits automatic resend of OUTCOME_UNKNOWN absent verification or an approved policy. |
 | PB-05 metric definitions | Glossary creation Approved; definitions not approved | Create the shared glossary before dashboard specification; do not treat metric definitions as approved by PB-05. |
-| Ingestion persistence and endpoint contracts | Data Model v1.4 and API v1.4.0 are Approved — Design Baselines, subject to documented conditions; v1.1/v1.1.0 were previous approved baselines | Exact fields are defined in `DATA_MODEL.md`; preview/confirm, rejection-report, job, and reconciliation contracts are defined in `API_SPEC.yaml`. |
+| Ingestion persistence and endpoint contracts | Data Model v1.5.2 and API v1.5.2 are Approved — Design Baselines, subject to documented conditions; v1.5.1 was the previous baseline | Exact fields are defined in `DATA_MODEL.md`; preview/confirm, rejection-report, job, and reconciliation contracts are defined in `API_SPEC.yaml`. |
 
 ### Cross-document sign-off note
 
-PB-03 and PRD v1.7 §9.3/AC22 agree on the approved 30-day recurrence rule; PRD §19.1 no longer lists recurrence as awaiting sign-off. SEC-01 and PB-06 approaches and DAI-04's stable logical defect identity across semantically compatible taxonomy versions are Approved. OPS-06's protected local filesystem artifact storage and joint recovery-set requirements are Approved; expiry/retention and exact backup operations remain open under OPS-03. DAI-06 methodology is Approved, but its exact parameters remain Pending Calibration for `DETECTION_SPEC.md`. OPS-01 remains Proposed and no provider is selected. ARC-07 is approved for local atomicity and conservative uncertain-outcome recovery; provider verification and external idempotency remain open under `ALERT_SPEC.md`. The final recipient directory/routing and evaluation parameters retain their existing sign-off/calibration statuses.
+PB-03 and PRD v1.7 §9.3/AC22 agree on the approved 30-day recurrence rule; PRD §19.1 no longer lists recurrence as awaiting sign-off. SEC-01 and PB-06 approaches and DAI-04's stable logical defect identity across semantically compatible taxonomy versions are Approved. OPS-06's protected local filesystem artifact storage and joint recovery-set requirements are Approved; PP-007 approves capstone artifact retention and development backups before migrations/resets. Deployment-specific backup cadence and retention remain open under OPS-03. DAI-06 methodology is Approved, but its exact parameters remain Pending Calibration for `DETECTION_SPEC.md`. OPS-01 deployment suitability remains gated. ARC-07 is approved for local atomicity and conservative uncertain-outcome recovery; provider verification and external idempotency remain open under `ALERT_SPEC.md`. The final recipient directory/routing and evaluation parameters retain their existing sign-off/calibration statuses.
 
 ## 20. P0 requirement-to-component mapping
 
@@ -346,7 +347,7 @@ PB-03 and PRD v1.7 §9.3/AC22 agree on the approved 30-day recurrence rule; PRD 
 |---|---|---|
 | F01 Login, session handling, RBAC | Frontend login; FastAPI auth/authorization boundary | SEC-01 approach Approved: secure email/password, server-side sessions, secure password hashes, `Secure`/`HttpOnly` cookies, CSRF protection, expiry/invalidation, protected first-Admin setup, and Admin-managed users; exact settings/recovery in `SECURITY.md`. |
 | F02 Admin-only CSV upload and validation | Admin Console; ingestion REST/service; protected local artifact directory | 20 MB/50,000-row limits; opaque upload artifact ID and metadata in SQLite; file published atomically before metadata reference; immutable preview identity bound to exact file/hash; partial acceptance. |
-| F03 Import status, error report, retry | SQLite job state; worker; Admin Console; protected local artifact directory | Downloadable rejection-report bytes stored as a protected file with SQLite ID/metadata linked to preview; preserve upload hash, actor, timestamps, job ID, accepted/rejected counts, linkage status, and reconciliation audit; bounded retries approved, numeric parameters open (OPS-02). |
+| F03 Import status, error report, retry | SQLite job state; worker; Admin Console; protected local artifact directory | Downloadable rejection-report bytes stored as a protected file with SQLite ID/metadata linked to preview; preserve upload hash, actor, timestamps, job ID, accepted/rejected counts, linkage status, and reconciliation audit. PP-007 approves 5/15/45-second eligible retry delays; PP-014 classification work is capped at 3 total attempts. Other work-type budgets remain unassigned (OPS-02). |
 | F04 Historical classification with Batch API | Admin-selected `HISTORICAL_BATCH` mode at confirmation; worker automatically queues newly persisted eligible feedback through the Batch API | Mode is immutable for the import and preserved on Admin retry; model ID open (DAI-05). |
 | F05 Near-real-time classification | Admin-selected `INCREMENTAL_RESPONSES` mode at confirmation; worker automatically queues newly persisted eligible feedback through the Responses API | Mode is immutable for the import and preserved on Admin retry; provider queue time excluded from PRD display target. |
 | F06 Strict-schema classification/taxonomy | Classification orchestration and validator; versioned taxonomy | Uncertain/invalid items stay visible and do not become `no_defect`. |
@@ -414,16 +415,16 @@ The evaluation pipeline reports per-class precision/recall and confusion data, h
 
 - SQLite remains the only primary relational database; no server database or second datastore is assumed.
 - API and worker share one persistent SQLite file and protected artifact directory on one active application instance.
-- Foreign keys are enabled for every connection; WAL is used where supported; busy timeout and short transactions are specified, with numeric timeout unresolved.
+- Foreign keys are enabled for every connection; WAL is used where supported; busy timeout is 5 seconds with up to 2 additional `SQLITE_BUSY` retries after rollback; transactions are short.
 - No database transaction remains open during OpenAI or email-provider calls.
 - Incident state changes that require notification and their outbox events commit atomically in one SQLite transaction; either both local writes commit or neither does.
 - Upload confirmation references an immutable preview identity bound to the exact staged file and verified hash; upload/report bytes are private filesystem artifacts with metadata-only SQLite references, atomic publication, orphan reconciliation, and joint recovery sets (OPS-06).
 - P0 feature and acceptance mappings preserve the PRD behavior; thresholds and calibration-sensitive values remain provisional where identified.
-- Open decisions are identified with their Decision Register IDs; OPS-01 remains Proposed and DAI-06 calibration parameters remain Pending Calibration. OPS-06 is Approved, while artifact expiry/retention and exact backup operations remain open under OPS-03. No provider or coverage parameter is silently approved.
+- Open decisions are identified with their Decision Register IDs; deployment-specific backup cadence/retention, provider-specific notification retry limits/routing/sink/external idempotency, OPS-01 deployment suitability, ARC-08 readiness thresholds, and DAI-06 calibration parameters remain gated. Capstone artifact retention and development backup-before-migration/reset are approved under PP-007/OPS-03; no provider or coverage parameter is silently approved.
 - SEC-01 and PB-06 are Approved at the stated approach level; exact session configuration/account recovery and exact coverage parameters remain assigned to downstream specifications.
 - Insufficient required baseline coverage is visible in analytics and monitoring and creates no automatic defect warning/incident or warning email; affected windows are reconsidered when sufficient coverage becomes available.
 - PB-03's approved 30-day recurrence behavior agrees with PRD §9.3 and AC22; PRD §19.1 no longer treats it as pending sign-off.
 
 ---
 
-**End of ProductPulse Architecture Specification v1.4**
+**End of ProductPulse Architecture Specification v1.5**

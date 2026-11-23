@@ -1,12 +1,12 @@
-# ProductPulse SQLite Data Model
+ ProductPulse SQLite Data Model
 
-**Version:** 1.4  
+**Version:** 1.5.2  
 **Status:** Approved — Design Baseline  
 **Requirements source:** [PRD](PRD.md) v1.7
-**Architecture:** [Architecture](ARCHITECTURE.md) v1.4, Approved  
-**Decision basis:** [Decision Register](DECISION_REGISTER.md) v1.7; [Tech Stack](TECH_STACK.md) v1.0; [Detection Spec](DETECTION_SPEC.md) v1.1 draft clarification; [Alert Spec](ALERT_SPEC.md) v0.2 draft  
-**Date:** 21 November 2026  
-**Approval date:** 21 November 2026
+**Architecture:** [Architecture](ARCHITECTURE.md) v1.5, Approved  
+**Decision basis:** [Decision Register](DECISION_REGISTER.md) v2.0; [Tech Stack](TECH_STACK.md) v1.2.0; [Detection Spec](DETECTION_SPEC.md) v1.1 draft clarification; [Alert Spec](ALERT_SPEC.md) v0.3 draft  
+**Date:** 22 November 2026  
+**Approval date:** 22 November 2026
 
 ## 1. Purpose and approval boundary
 
@@ -20,8 +20,10 @@ The model is intentionally relational and append-oriented. It uses one shared fe
 
 ## 2. SQLite and representation conventions
 
+- **CSV contract:** enforce a 20,000,000-byte file-part ceiling and at most 50,000 logical data records after the header (blank records count). Input is strict UTF-8 with one optional initial BOM. Parser contract versions are reviews-v1, returns-v1, product-reference-v1, supplier-reference-v1, and batch-reference-v1. Timestamps require Z/offset and at most three fractional digits, then persist as UTC milliseconds. Feedback is capped at 16,384 code points, other mapped text at 1,024, and each decoded field at 65,536 UTF-8 bytes; accepted text is never truncated.
+
 - **IDs:** use application-generated opaque TEXT identifiers for internal rows. Their format and generator are not selected here. Product, supplier, batch, and source-record IDs remain the source-provided TEXT values.
-- **Identifier comparison:** source IDs are preserved as text; case folding, whitespace normalization, and Unicode normalization are not inferred. The ingestion contract must define normalization consistently before uniqueness and payload hashing are implemented.
+- **Identifier comparison:** product, supplier, batch, and source-record IDs are preserved exactly as decoded UTF-8 text, case-sensitive, with no trimming, case-folding, or Unicode normalization. Reject empty, whitespace-only, and leading/trailing-whitespace IDs. Accepted identifiers are at most 256 Unicode code points. Canonical payload/hash rules are defined in the approved DAI-01/02 API contract.
 - **Timestamps:** persist UTC instants as TEXT in one fixed-precision RFC 3339 representation ending in `Z` (for example, millisecond precision). Persist interval boundaries as UTC instants. This consistent representation makes lexical ordering checks reliable. Application code supplies timestamps; do not mix SQLite date-function strings, local times, and UTC values.
 - **Booleans:** INTEGER constrained to 0 or 1. SQLite has no separate Boolean storage class.
 - **Enums:** TEXT values constrained to the states listed below. Status transitions remain application responsibilities.
@@ -122,7 +124,7 @@ The diagram omits scalar audit/configuration attributes for readability. The tab
 
 ## 4. Table definitions
 
-All listed foreign keys use restrictive delete behavior. No cascade may remove audit or operational history. Preview/artifact expiry is unresolved and belongs in the API and operations specifications; any permitted cleanup must first satisfy foreign-key and audit-retention requirements.
+All listed foreign keys use restrictive delete behavior. No cascade may remove audit or operational history. PP-007 approves retaining synthetic artifacts through the capstone period without automatic per-artifact expiry. Cleanup is limited to the documented synthetic reset/reseed after a coherent backup and reference/audit checks; any reset must satisfy foreign-key and audit-retention requirements.
 
 ### 4.1 Identity and access
 
@@ -133,16 +135,17 @@ Fixed MVP roles are values on the user row; a separate roles table would add no 
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
 | user_id | TEXT | No | None | Primary key; opaque internal ID. |
-| email | TEXT | No | None | Login/contact address. Canonicalization and case-insensitive uniqueness rule remain for SECURITY.md. |
-| email_normalized | TEXT | No | None | Unique index target after the canonicalization rule is approved. |
-| password_hash | TEXT | No | None | Secure password hash only; never store a password or session token in clear text. |
+| email | TEXT | No | None | Trimmed display/login address preserving entered case; canonical identity is stored separately in email_normalized. |
+| email_normalized | TEXT | No | None | UNIQUE; outer ASCII whitespace trimmed, Unicode NFC, domain converted to lowercase IDNA ASCII, then full normalized address case-folded. No plus/dot alias rewriting. |
+| password_hash | TEXT | No | None | Salted Argon2id encoded hash produced by argon2-cffi with approved cost parameters; never store a password or session token in clear text. |
 | role | TEXT | No | None | CHECK: ADMIN, BUSINESS_USER. No Viewer role in MVP. |
 | status | TEXT | No | None | CHECK: ACTIVE, DEACTIVATED. Deactivation is preferred to deletion. |
+| must_change_password | INTEGER | No | None | CHECK 0 or 1. Explicitly true for Admin-created/reset temporary passwords; clear only after compliant change. Bootstrap Admin sets false. |
 | created_at | TEXT | No | None | UTC creation time. |
 | updated_at | TEXT | No | None | UTC last account change. |
 | deactivated_at | TEXT | Yes | None | UTC deactivation time, null while active. |
 
-Constraint: ACTIVE requires deactivated_at to be null; DEACTIVATED requires it to be non-null. Deactivation and revocation of live sessions are handled together by the service.
+Constraints: ACTIVE requires deactivated_at null; DEACTIVATED requires it non-null. must_change_password is explicitly set at account creation/reset and is cleared only by password change. Deactivation and revocation of all live sessions are handled together by the service.
 
 #### sessions
 
@@ -158,7 +161,7 @@ Store a hash of the opaque browser token; never store the bearer token. Cookie a
 | last_seen_at | TEXT | Yes | None | UTC last activity, if recorded. |
 | revoked_at | TEXT | Yes | None | UTC logout/revocation time. |
 
-Constraints: expires_at must be later than created_at. Expired-session cleanup and exact expiry duration remain for SECURITY.md.
+Constraints: expires_at is the 8-hour absolute deadline from created_at; last_seen_at controls the 30-minute idle deadline. Reject at the earlier deadline. Multiple live sessions per user are allowed; deactivation/reset/change revokes all applicable sessions. Expired-session cleanup remains an implementation detail.
 
 ### 4.2 Product and source records
 
@@ -199,13 +202,13 @@ Constraint: UNIQUE(batch_id, product_id, supplier_id), in addition to the primar
 
 #### feedback
 
-One row represents one immutable review or return-reason record. This common table enforces the PRD's global source identity pair without duplicating review and return storage. The original source text and event time are not overwritten by ordinary ingestion or reconciliation.
+One row represents one immutable review or return-reason record. The approved parser enforces field length before persistence. This common table enforces the PRD's global source identity pair without duplicating review and return storage. The original source text and event time are not overwritten by ordinary ingestion or reconciliation.
 
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
 | feedback_id | TEXT | No | None | Primary key; opaque internal ID. |
 | source_type | TEXT | No | None | CHECK: REVIEW, RETURN. |
-| source_record_id | TEXT | No | None | ID supplied in the source file. |
+| source_record_id | TEXT | No | None | Exact source ID from file, 1-256 Unicode code points; case-sensitive, no trim/case-fold/Unicode normalization; reject empty/whitespace-only/outer whitespace. |
 | product_id | TEXT | No | None | FK to products.product_id; valid product identity is required for accepted feedback. |
 | supplier_id | TEXT | Yes | None | Resolved FK to suppliers.supplier_id; null if unresolved. |
 | batch_id | TEXT | Yes | None | Resolved FK to batches.batch_id; null if unresolved. |
@@ -213,7 +216,7 @@ One row represents one immutable review or return-reason record. This common tab
 | reported_batch_id | TEXT | Yes | None | Original batch identifier, if supplied, even when unresolved. |
 | linkage_status | TEXT | No | None | CHECK: LINKED, LINKAGE_PENDING. Set explicitly. |
 | event_time_utc | TEXT | No | None | Source event timestamp normalized to UTC. |
-| feedback_text | TEXT | No | None | Original review text or return reason. |
+| feedback_text | TEXT | No | None | Original review text or return reason; max 16,384 Unicode code points and 65,536 UTF-8 bytes per decoded field; never truncate. |
 | rating | INTEGER | Yes | None | Review rating; CHECK 1 through 5 when present. |
 | source_label | TEXT | Yes | None | Optional review source. |
 | return_quantity | INTEGER | Yes | None | Optional positive returned units; CHECK greater than 0 when present. |
@@ -241,7 +244,7 @@ The model retains reported identifiers separately from resolved foreign keys. Un
 
 #### csv_uploads
 
-Approved under OPS-06: keep staged CSV bytes in the protected persistent local filesystem directory shared by the API and worker. SQLite stores an opaque artifact ID and metadata only, not the uploaded bytes. The ID is server-generated and is not a filesystem path; backend code resolves it safely under the configured storage root. The file remains immutable while its preview is usable, and its hash binds confirmation to the exact bytes previewed. Artifact expiry/retention remains open under OPS-03.
+Approved under OPS-06: keep staged CSV bytes in the protected persistent local filesystem directory shared by the API and worker. SQLite stores an opaque artifact ID and metadata only, not the uploaded bytes. The ID is server-generated and is not a filesystem path; backend code resolves it safely under the configured storage root. The file remains immutable while its preview is usable, and its hash binds confirmation to the exact bytes previewed. Under PP-007/OPS-03, synthetic artifacts are retained through the capstone period without automatic per-artifact expiry; deployment-specific retention remains open.
 
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
@@ -249,7 +252,7 @@ Approved under OPS-06: keep staged CSV bytes in the protected persistent local f
 | upload_kind | TEXT | No | None | CHECK: REVIEWS, RETURNS, PRODUCT_REFERENCE, SUPPLIER_REFERENCE, BATCH_REFERENCE. Exact reference templates follow DAI-01/API_SPEC.yaml. |
 | original_filename | TEXT | No | None | Sanitized display name; never use directly as a filesystem path. |
 | artifact_id | TEXT | No | None | UNIQUE, globally non-reused opaque server-generated identifier for the immutable staged file; no filesystem path or file bytes are stored here. |
-| file_size_bytes | INTEGER | No | None | CHECK between 1 and PRD's 20 MB limit; measurement convention for MB is to be stated by API_SPEC.yaml. |
+| file_size_bytes | INTEGER | No | None | CHECK between 1 and 20,000,000 inclusive; decimal 20 MB file-part ceiling enforced while streaming before parsing. |
 | file_sha256 | TEXT | No | None | Verified SHA-256 of the exact uploaded bytes. |
 | uploaded_by | TEXT | No | None | FK to users.user_id; upload is Admin-only at the API boundary. |
 | uploaded_at | TEXT | No | None | UTC receipt time. |
@@ -261,12 +264,14 @@ One immutable preview identity is bound to the exact staged bytes/hash and saved
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
 | preview_id | TEXT | No | None | Primary key; immutable identity. |
+| preview_idempotency_key | TEXT | No | None | UNIQUE key for preview creation; same key plus same request fingerprint replays original preview; same key with different fingerprint conflicts. |
+| preview_request_sha256 | TEXT | No | None | SHA-256 of canonical request identity: upload kind, exact staged-file SHA-256, and canonical mapping snapshot. |
 | upload_id | TEXT | No | None | FK to csv_uploads.upload_id. |
 | verified_sha256 | TEXT | No | None | Must equal csv_uploads.file_sha256 for the referenced immutable artifact. |
-| parser_contract_version | TEXT | No | None | Template/parser contract used for validation. |
+| parser_contract_version | TEXT | No | None | One of reviews-v1, returns-v1, product-reference-v1, supplier-reference-v1, batch-reference-v1; increment when parse/validation/normalization semantics change. |
 | column_mappings_text | TEXT | No | None | Canonical JSON array snapshot of each source header index/text and its canonical target or explicit IGNORE choice for an optional source column, bound to this immutable preview and verified file hash under approved DAI-08. |
-| state | TEXT | No | None | CHECK: READY, INVALID, CONFIRMED, EXPIRED. Expiry timing is unresolved. |
-| total_row_count | INTEGER | No | None | CHECK 0 through 50,000 parsed data rows. |
+| state | TEXT | No | None | CHECK: READY, INVALID, CONFIRMED, EXPIRED. Do not set EXPIRED through a timer during the capstone policy; any future expiration behavior requires an approved policy. |
+| total_row_count | INTEGER | No | None | CHECK 0 through 50,000 logical data records after the header; blank records count. |
 | accepted_row_count | INTEGER | No | None | Valid rows eligible for confirmation; non-negative. |
 | rejected_row_count | INTEGER | No | None | Structurally invalid rows; non-negative. |
 | duplicate_row_count | INTEGER | No | None | Identical duplicate/no-op rows; non-negative. |
@@ -275,7 +280,7 @@ One immutable preview identity is bound to the exact staged bytes/hash and saved
 | confirmed_by | TEXT | Yes | None | FK to users.user_id; set only on confirmation. |
 | confirmed_at | TEXT | Yes | None | UTC confirmation time. |
 
-Constraints: preview_id is the immutable identity and primary key. A repeated preview request may create a separate immutable preview; the API must define whether it reuses or creates one. Counts must reconcile with row statuses. CONFIRMED requires confirmed_by and confirmed_at; READY, INVALID, and EXPIRED require both to be null. When present, confirmed_at is not earlier than created_at. The mapping snapshot is immutable after preview creation and must match the staged file's header indices/text. The backend enforces per-upload-kind targets, maps each required target exactly once, prohibits duplicate target mappings, permits optional source columns to be marked IGNORE, and prevents confirmation when a required mapping is missing. Any mapping or file change requires a new validated preview. Ingestion and mapping access is Admin-only at the API boundary.
+Constraints: preview_id is immutable. The same preview_idempotency_key and request fingerprint return this original preview; reusing the key with a different fingerprint returns 409; a new key creates a new immutable preview. A preview is READY only with at least one eligible new row and INVALID when none are eligible. Counts must reconcile with row statuses. CONFIRMED requires confirmed_by and confirmed_at; READY, INVALID, and EXPIRED require both to be null. When present, confirmed_at is not earlier than created_at. The parser version, verified file hash, mapping snapshot, request fingerprint, and row outcomes are immutable after preview creation. The mapping snapshot must match the staged file's header indices/text. The backend enforces per-upload-kind targets, maps each required target exactly once, prohibits duplicate target mappings, permits optional source columns to be marked IGNORE, and prevents confirmation when a required mapping is missing. Any mapping or file change requires a new validated preview. Ingestion and mapping access is Admin-only at the API boundary.
 
 #### upload_preview_rows
 
@@ -284,7 +289,7 @@ Stores one durable validation result per file row. The same table supports downl
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
 | preview_id | TEXT | No | None | FK to upload_previews.preview_id; composite primary key. |
-| row_number | INTEGER | No | None | 1-based data-row number, at most 50,000; composite primary key. |
+| row_number | INTEGER | No | None | 1-based logical data-record number, at most 50,000; blank records count; composite primary key. |
 | row_status | TEXT | No | None | CHECK: ACCEPTED, REJECTED, DUPLICATE_NOOP, CONFLICT. |
 | source_type | TEXT | Yes | None | REVIEW/RETURN for feedback rows; null for reference rows or unparseable rows. |
 | source_record_id | TEXT | Yes | None | Parsed source identity, when available. |
@@ -298,7 +303,7 @@ Constraints: ACCEPTED rows require normalized_row_text and a usable source ident
 
 #### rejection_report_artifacts
 
-Metadata for generated downloadable rejection reports. The report bytes are stored in the protected local artifact directory, not in SQLite. Each report is linked to the immutable preview whose row decisions it represents.
+Metadata for generated downloadable rejection reports. The report bytes are protected local UTF-8 CSV artifacts linked to the immutable preview. Include rejected/conflicting rows only; exclude DUPLICATE_NOOP. Columns are row number, outcome, parsed source type/identity when available, stable reason code, and safe explanation; omit raw feedback and apply formula-safe escaping.
 
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
@@ -309,7 +314,7 @@ Metadata for generated downloadable rejection reports. The report bytes are stor
 | generated_by | TEXT | Yes | None | FK to users.user_id; null only when generated by a system process. |
 | created_at | TEXT | No | None | UTC generation/publication time. |
 
-The backend resolves artifact_id beneath the configured storage root and verifies the stored hash before download. The report is available only through an authorized backend route; the filesystem directory is not directly served. Report format, endpoint contract, and expiry/retention remain for API_SPEC.yaml and the operations specification.
+The backend resolves artifact_id beneath the configured storage root and verifies the stored hash before download. The report is available only through an authorized backend route; the filesystem directory is not directly served. Report format and endpoint contract remain in API_SPEC.yaml. OPS-03 approves retaining synthetic upload, preview, row-reason, and rejection-report artifacts through the capstone period without automatic per-artifact expiry; cleanup is limited to documented synthetic reset/reseed after backup and reference/audit checks.
 
 #### ingestion_jobs
 
@@ -335,11 +340,11 @@ Business-facing import state and counts. Executable retries/leases are recorded 
 
 Constraints: UNIQUE(preview_id, job_id) is an explicit alternate key for SQLite composite foreign keys; the single-column UNIQUE(preview_id) continues to enforce one job per preview. The referenced upload kind governs processing_mode: feedback imports require one of the two modes, while reference imports require NULL. A repeated confirmation with a different mode conflicts; the mode cannot be changed by a retry.
 
-Status/count transitions must be transactionally consistent with accepted source rows. QUEUED has null started_at/completed_at; RUNNING requires started_at and null completed_at; COMPLETED, PARTIAL, and FAILED require completed_at. When both are present, completed_at is not earlier than started_at. The allowed chunking and progress-commit boundary for large imports remain implementation details under ARC-04; retries must not duplicate source rows.
+Status/count transitions must be transactionally consistent with accepted source rows. QUEUED has null started_at/completed_at; RUNNING requires started_at and null completed_at; COMPLETED, PARTIAL, and FAILED require completed_at. When both are present, completed_at is not earlier than started_at. For PP-014, use one SQLite `BEGIN IMMEDIATE` transaction for the ingestion job, feedback rows, product placeholders, classification work item, and preview confirmation. Read and persist accepted rows in chunks of at most 500; perform identity/link lookups in groups of at most 250 rows (at most 500 source-identity bind values or 750 linkage bind values). Use executemany for product inserts so each SQLite statement stays below 999 bind variables. Do not commit between chunks; any failure rolls back all rows and queue state. Verify the artifact hash and stale-source identities while holding the writer transaction. This bounded single transaction preserves the all-or-nothing import and prevents a retry from duplicating source rows.
 
 #### ingestion_conflicts
 
-Covers both changed source payloads and conflicting reference mappings. It points to the incoming preview row rather than overwriting existing source data.
+Covers changed source payloads and conflicting reference mappings. Source conflicts cannot apply incoming source text. Reference decisions are KEEP_EXISTING (resolve without change), DISMISS (dismiss without change), or APPLY_INCOMING_REFERENCE (apply validated fields only when the expected existing-value hash matches); stale application returns 409. The incoming preview row remains immutable and provenance is audited.
 
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
@@ -499,12 +504,12 @@ A durable work item for ingestion execution, classification, historical Batch po
 | ingestion_job_id | TEXT | Yes | None | FK to ingestion_jobs.job_id when applicable. |
 | status | TEXT | No | QUEUED | CHECK: QUEUED, RUNNING, RETRY_WAIT, COMPLETED, PARTIAL, FAILED. |
 | attempt_count | INTEGER | No | 0 | Non-negative; increments for each claimed execution attempt. |
-| max_attempts | INTEGER | No | None | Positive retry-budget snapshot; numeric policy remains OPS-02. |
+| max_attempts | INTEGER | No | None | Positive retry-budget snapshot. For the `CLASSIFICATION` item created by PP-014 for a confirmed feedback import, persist 3 total claimed attempts (initial plus at most two additional attempts), per the 22 November 2026 OPS-02 clarification. Other job types retain their unresolved OPS-02 values. |
 | scheduled_at | TEXT | No | None | Earliest intended work time. |
 | next_attempt_at | TEXT | Yes | None | Retry eligibility time. |
 | worker_id | TEXT | Yes | None | Current claimant identity, if any. |
-| lease_token | TEXT | Yes | None | Current claim token; exact lease pattern remains open under ARC-04. |
-| lease_expires_at | TEXT | Yes | None | UTC lease expiry; duration/renewal/recovery remain open under ARC-04. |
+| lease_token | TEXT | Yes | None | Current claim owner token; result writes and renewals must condition on this token so stale owners cannot overwrite newer work. |
+| lease_expires_at | TEXT | Yes | None | UTC lease expiry; PP-007 sets a 5-minute lease and renewal every 60 seconds, including during long provider calls. |
 | provider_input_file_id | TEXT | Yes | None | OpenAI Files API input-file ID for a historical Batch job; persist after upload and before Batch creation so a restart can reconcile an uncertain submission. Null for non-Batch work; unique when non-null. |
 | provider_batch_id | TEXT | Yes | None | OpenAI Batch identifier for historical work; no model/provider assumption. |
 | last_error_code | TEXT | Yes | None | Stable redacted operational code. |
@@ -513,7 +518,11 @@ A durable work item for ingestion execution, classification, historical Batch po
 | started_at | TEXT | Yes | None | UTC first start. |
 | completed_at | TEXT | Yes | None | UTC terminal time. |
 
-Status/time rule: QUEUED and RETRY_WAIT have null completed_at and no active claim tuple; RUNNING requires started_at, worker_id, lease_token, and lease_expires_at with null completed_at; COMPLETED, PARTIAL, and FAILED require completed_at and no active claim tuple. next_attempt_at is set only for RETRY_WAIT. If both start and completion timestamps exist, completion is not earlier than start. Exact lease behavior remains unresolved under ARC-04.
+Status/time rule: QUEUED and RETRY_WAIT have null completed_at and no active claim tuple; RUNNING requires started_at, worker_id, lease_token, and lease_expires_at with null completed_at; COMPLETED, PARTIAL, and FAILED require completed_at and no active claim tuple. next_attempt_at is set only for RETRY_WAIT. If both start and completion timestamps exist, completion is not earlier than start. The worker claims one item in a short `BEGIN IMMEDIATE` transaction, renews an active lease every 60 seconds in a separate short transaction conditioned on lease_token, including during provider calls, and rejects stale-owner writes. Provider calls occur outside SQLite transactions.
+
+At worker startup and every 60 seconds while running, reconciliation finds expired claims, finalizes the active attempt as `ABANDONED`, and clears its lease. A work item without an approved `max_attempts` budget is not eligible for worker claim or automatic replay; keep it queued and visible for disposition without inventing a budget. Reconciliation schedules another attempt only when the result is known safe to retry and an approved budget exists, using the next eligible 5/15/45-second delay. An exhausted approved budget yields a terminal `FAILED` job. Provider submissions with uncertain outcomes must follow their owning correlation/reconciliation contract before resubmission.
+
+For each confirmed feedback import with accepted rows, PP-014 creates one stable `CLASSIFICATION` work item linked to its `ingestion_job_id`, with `status=QUEUED`, `attempt_count=0`, and `max_attempts=3` total claims, including the initial attempt. Its stable `work_key` derives from the ingestion job identity. Queue creation is atomic with the accepted feedback rows and ingestion job. No execution-attempt row is created until a worker claims the item. PP-014 does not implement claiming, retry execution, backoff, leases, recovery, or provider calls. PP-007 approves retry delays of 5, 15, then 45 seconds; this classification item can use only the first two delays. Other job-type attempt budgets are not assigned a default and remain a prerequisite for their processing implementations.
 
 Batch persistence rule: create one durable `BATCH_POLL` job per provider input file. If one import is split across input files, each job references the same `ingestion_job_id` and owns its own provider input-file ID and Batch ID. Persist all classification rows assigned to that job, each linked by non-null `background_job_id`, before uploading/submitting provider work. The Files API ID is stored before Batch creation; the Batch create request carries the stable ProductPulse `background_job_id` in metadata. If the create response is ambiguous, recovery lists/paginates provider Batches and matches both metadata job ID and `provider_input_file_id` before considering resubmission. If multiple batches match after an uncertain retry, the earliest `created_at` then lexicographically smallest Batch ID is canonical; best-effort cancel later duplicates and ignore their outputs. These service-level recovery rules require no SQLite-specific JSON or array column.
 
@@ -535,7 +544,7 @@ One row per claimed execution attempt; create it as IN_PROGRESS when claimed and
 | safe_error_summary | TEXT | Yes | None | No raw feedback, prompt, secret, or credential. |
 | next_attempt_at | TEXT | Yes | None | Required only for RETRYABLE_FAILURE after a retry has been scheduled; null otherwise. |
 
-Constraints: IN_PROGRESS requires finished_at and next_attempt_at null. SUCCEEDED, RETRYABLE_FAILURE, TERMINAL_FAILURE, and ABANDONED require finished_at. RETRYABLE_FAILURE requires next_attempt_at; all other outcomes require it null. ABANDONED means the attempt ended without a known result, such as a worker lease expiring; it is not success and does not itself choose whether or when a new attempt is scheduled. The lease-token pattern shown by these fields is an implementation-ready candidate, not an additional approval. Lease claim/update predicates, stale-worker handling, retry budget, backoff, reconciliation cadence, and SQLITE_BUSY behavior remain unresolved.
+Constraints: IN_PROGRESS requires finished_at and next_attempt_at null. SUCCEEDED, RETRYABLE_FAILURE, TERMINAL_FAILURE, and ABANDONED require finished_at. RETRYABLE_FAILURE requires next_attempt_at; all other outcomes require it null. ABANDONED means the attempt ended without a known result, such as a worker lease expiring; reconciliation retries only when the outcome is safe and the work type has an approved budget, otherwise it does not automatically replay the work. Under PP-007, claim/renew/result updates are conditioned on the current lease token, stale-owner writes are rejected, polling is every 5 seconds, reconciliation runs at startup and every 60 seconds, and eligible retry delays are 5/15/45 seconds subject to an approved per-work-type attempt budget. SQLite uses a 5-second busy timeout and up to 2 additional `SQLITE_BUSY` retries after rollback.
 
 #### source_coverage
 
@@ -720,9 +729,9 @@ Append-only audit for account/configuration/ingestion/admin actions not already 
 | request_id | TEXT | Yes | None | Request/correlation ID. |
 | created_at | TEXT | No | None | UTC event time. |
 
-Constraints: source_ingestion_job_id, source_preview_id, and source_row_number are either all null or all non-null. Composite FK (source_preview_id, source_ingestion_job_id) references ingestion_jobs(preview_id, job_id), and composite FK (source_preview_id, source_row_number) references upload_preview_rows(preview_id, row_number). For every product, supplier, or batch value created or changed from a reference-file row, write an audit event whose resource_type/resource_id identify the entity and whose source fields identify the exact preview row selected for application. The preview row remains the exact input snapshot; before/after audit snapshots record the applied values, including any Admin conflict resolution. Seed-origin changes include the seed manifest reference in the audit snapshot. Admin notification retries use an append-only `NOTIFICATION_RETRY_REQUESTED` audit event with the request idempotency key; lease reconciliation uses a safe system audit event.
+Constraints: source_ingestion_job_id, source_preview_id, and source_row_number are either all null or all non-null. Composite FK (source_preview_id, source_ingestion_job_id) references ingestion_jobs(preview_id, job_id), and composite FK (source_preview_id, source_row_number) references upload_preview_rows(preview_id, row_number). For every product, supplier, or batch value created or changed from a reference-file row, write an audit event whose resource_type/resource_id identify the entity and whose source fields identify the exact preview row selected for application. The preview row remains the exact input snapshot; before/after audit snapshots record the applied values, including reference conflict resolutions. Authentication/security events use safe stable action codes for successful login/logout, account create/deactivate/reset/change, session revocation, and authorization denial. Failed-login/throttle detail uses a restricted redacted security log. Seed-origin changes include the seed manifest reference in the audit snapshot. Admin notification retries use an append-only `NOTIFICATION_RETRY_REQUESTED` audit event with the request idempotency key; lease reconciliation uses a safe system audit event.
 
-Audit snapshots may contain only allow-listed state fields: status, active flag, user role, configuration version, threshold severity, routing scope/key, recipient-group IDs, notification type/trigger kind/status/attempt count, safe provider error code, import processing mode, upload kind, linkage status, product/supplier/batch catalog IDs, aggregate row counts, and a synthetic seed manifest reference. They must never contain raw feedback, names or email addresses, password hashes, session identifiers, CSRF tokens, API keys, arbitrary message subject/body, provider payloads, filesystem paths, or raw exception text. Use separate protected records for data that the PRD requires to be retained, such as an explicitly confirmed manual notification message.
+Audit snapshots may contain only allow-listed state fields: status, active flag, user role, must_change_password, configuration version, threshold severity, routing scope/key, recipient-group IDs, notification type/trigger kind/status/attempt count, safe provider error code, import processing mode, upload kind, linkage status, product/supplier/batch catalog IDs, aggregate row counts, and a synthetic seed manifest reference. They must never contain raw feedback, names or email addresses, password hashes, session identifiers, CSRF tokens, API keys, arbitrary message subject/body, provider payloads, filesystem paths, or raw exception text. Use separate protected records for data that the PRD requires to be retained, such as an explicitly confirmed manual notification message.
 
 ### 4.8 Notification directory, outbox, and delivery
 
@@ -809,10 +818,10 @@ The durable notification intent and current delivery state in one row. A confirm
 | body_text | TEXT | No | None | Exact previewed/sent body; exclude personal customer details. |
 | status | TEXT | No | QUEUED | CHECK: QUEUED, SENDING, ACCEPTED, FAILED, DELIVERED, BOUNCED, OUTCOME_UNKNOWN, BLOCKED_NO_ROUTE. |
 | attempt_count | INTEGER | No | 0 | Non-negative scheduled delivery-attempt rows; increments when an initial send, automatic retry, or Admin retry is durably scheduled. |
-| next_attempt_at | TEXT | Yes | None | Retry eligibility; retry policy remains OPS-02/ALERT_SPEC.md. |
+| next_attempt_at | TEXT | Yes | None | Retry eligibility; PP-007 sets 5/15/45-second delays for eligible retries, while provider-specific notification retry limits remain under PP-008. |
 | worker_id | TEXT | Yes | None | Current claimant when sending. |
-| lease_token | TEXT | Yes | None | Claim token; lease semantics unresolved under ARC-04. |
-| lease_expires_at | TEXT | Yes | None | UTC expiry; duration/renewal unresolved. Notification recovery behavior is defined in ALERT_SPEC.md. |
+| lease_token | TEXT | Yes | None | Current claim owner token; renewal and outcome writes are conditional on this token so stale owners cannot update the outbox. |
+| lease_expires_at | TEXT | Yes | None | UTC expiry; use the PP-007 5-minute lease, renewed every 60 seconds including during provider calls. Notification uncertain-outcome recovery remains defined in ALERT_SPEC.md. |
 | provider_message_id | TEXT | Yes | None | Provider reference when available. |
 | created_at | TEXT | No | None | UTC outbox creation time. |
 | confirmed_at | TEXT | Yes | None | UTC user confirmation time; required for MANUAL. |
@@ -887,10 +896,10 @@ Create only these justified indexes initially, then verify query plans and measu
 
 | Index purpose | Columns / predicate | Reason |
 |---|---|---|
-| Unique normalized user email | users.email_normalized | Login lookup and account uniqueness. Normalization rule remains open. |
+| Unique normalized user email | users.email_normalized | Exact SEC-01 canonicalization supports login lookup and prevents duplicate identities. |
 | Live session lookup | sessions.token_hash; sessions.user_id plus expires_at/revoked_at | Authentication lookup and session invalidation/cleanup. |
 | Batch linkage | batches(batch_id, product_id, supplier_id) UNIQUE | Validate composite references. |
-| Upload and preview lookup | csv_uploads(uploaded_by, uploaded_at); upload_previews(upload_id, created_at); upload_preview_rows(preview_id, row_status, row_number) | Admin history, preview access, row report. |
+| Upload and preview lookup | csv_uploads(uploaded_by, uploaded_at); upload_previews(preview_idempotency_key) UNIQUE; upload_previews(upload_id, created_at); upload_preview_rows(preview_id, row_status, row_number) | Admin history, idempotent preview replay, row report. |
 | Rejection report artifacts | rejection_report_artifacts(preview_id, created_at) | Find generated report metadata/files for a preview without storing report bytes in SQLite. |
 | Ingestion operations | ingestion_jobs(status, created_at); ingestion_conflicts(state, created_at); ingestion_conflicts(source_type, source_record_id) | Queue/health and Admin conflict review. |
 | Feedback identity and time | feedback(source_type, source_record_id) UNIQUE; feedback(event_time_utc); feedback(product_id, event_time_utc); feedback(batch_id, event_time_utc) where batch_id is not null; feedback(linkage_status, event_time_utc); feedback(ingestion_job_id) | Idempotency, charts, detail drill-down, and processing state. |
@@ -910,7 +919,7 @@ Partial indexes are supported by SQLite, but the minimum SQLite runtime version 
 ## 6. Idempotency and traceability rules
 
 1. **Upload and rejection report:** store opaque artifact IDs and metadata in SQLite; keep original CSV and generated report bytes in the protected local filesystem directory. Preserve upload hash, size, uploader, timestamps, preview identity, parser contract version, row decisions, report hash/size, and report-to-preview link. Confirmation must reference the immutable preview identity and the same verified upload hash. CSV-uploaded feedback stores job and preview-row lineage; seeded synthetic feedback stores its seed manifest reference. Business User upload attempts are rejected by the API before creating upload, preview, or job rows.
-2. **Rows and source records:** global source identity is (source_type, source_record_id). Compare a deterministic payload hash. Identical rows are no-ops; differing payloads are conflicts for Admin review. Preserve prior feedback text/event time. Canonical hashing rules and normalization are specified by API_SPEC.yaml.
+2. **Rows and source records:** global source identity is (source_type, source_record_id), compared exactly and case-sensitively. Compare deterministic payload hashes over canonical validated fields after timestamp normalization; preserve source text/IDs without normalization. Identical payloads are no-ops; differing source payloads are conflicts and never overwrite. Parser/hash versioning follows API_SPEC.yaml.
 3. **Import retry:** a stable confirmation idempotency key and one job per preview prevent repeated confirmation. Persist accepted records and progress so a retry resumes without duplicates. Counts distinguish accepted, rejected, no-op duplicates, conflicts, and newly persisted records.
 4. **Classification:** every attempt records feedback, taxonomy, schema, prompt, model, path, timing, usage, cost, and outcome. Validate provider source identity and strict schema before COMPLETED. Do not translate failure/uncertainty to NO_DEFECT.
 5. **Detection:** `result_key` is SHA-256 of immutable canonical `result_input_snapshot_text`; it includes cluster/windows, evaluation mode, rule and coverage-policy versions, source-coverage assessment/declarations, classification-completeness assessments, and all relevant source/classification state tuples (including unresolved and definitive no-defect states). Store counted evidence and coverage declarations. Late arrivals, classification changes, rule/policy changes, and linkage corrections enqueue affected-window recomputation; retain old results and evidence.
@@ -923,23 +932,23 @@ Partial indexes are supported by SQLite, but the minimum SQLite runtime version 
 ## 7. SQLite operation and transaction requirements
 
 - SQLite remains the only primary relational database. API and one worker share the same persistent local file on one active application instance.
-- Enable foreign-key enforcement for every connection. Use WAL mode where supported and an explicit busy timeout; its duration is unresolved. Measure writer contention and keep writes short.
-- Do not hold a transaction open during OpenAI, email, or other network I/O. Claim/update internal work in one short transaction, commit, perform I/O, and persist the result in a new short transaction.
+- Enable foreign-key enforcement for every connection. Use WAL mode where supported and set a 5-second busy timeout on every relevant connection. After a timed-out `SQLITE_BUSY`, roll back and retry the same idempotent database unit up to 2 additional times. Measure writer contention and keep writes short.
+- Do not hold a transaction open during OpenAI, email, or other network I/O. Claim/update internal work in one short `BEGIN IMMEDIATE` transaction, commit, perform I/O, and persist the result in a new short transaction. The worker polls every 5 seconds, claims one item at a time with a 5-minute lease, renews it every 60 seconds through a separate short transaction (including while a provider call is in progress), and conditions renewal/result writes on the current lease token. Reject stale-owner writes.
 - SQLite has one writer at a time. WAL can improve reader/writer coexistence but does not enable concurrent writers. Do not add workers, a broker, a second database, or network-filesystem access as a contention workaround.
 - ARC-07 requires the incident state change and its required outbox event to be atomic. Insert/update incident state, timeline event, outbox intent, exact recipient/routing snapshots, and the initial QUEUED delivery attempt when a route resolves in the same transaction. If any database write fails, roll the entire transaction back; send only after commit.
 - Detection-result application state is part of that same transaction. A current qualifying result is first durably stored as PENDING; if application fails, the local transaction rolls back and the result remains PENDING for recovery. An existing result_key must not short-circuit this recovery. Before applying a PENDING result, compare its stored fingerprint with the current canonical input snapshot for the same T/rule/policy. If inputs changed, mark it SUPERSEDED and ensure recomputation of the latest snapshot is durably queued; do not apply stale incident/outbox effects. Set APPLIED only with incident/audit/outbox effects committed; a retry checks the stable incident event key and outbox identity before inserting effects again. Historical and non-trigger/insufficient results are NOT_APPLICABLE.
 - The notification worker must account for a provider call whose result becomes uncertain after the request leaves the process. Expired SENDING with a still-QUEUED attempt returns to QUEUED; an abandoned IN_PROGRESS attempt becomes OUTCOME_UNKNOWN and is not automatically resent absent provider verification or an approved policy.
 - Use SQLite-compatible foreign keys, CHECK/UNIQUE constraints, and partial indexes. Do not assume PostgreSQL JSONB, advisory locks, SKIP LOCKED, or a network database.
-- Exact transaction boundaries for 50,000-row imports, atomic job claim, lease duration/renewal/stale-lease recovery, SQLITE_BUSY handling, retry limits, and reconciliation cadence remain open under ARC-04/OPS-02.
+- Reconcile at worker startup and every 60 seconds while running. Use the PP-007 retry-delay sequence of 5, 15, then 45 seconds only for eligible known transient failures and only within an approved per-work-type attempt budget. PP-014-created `CLASSIFICATION` work items retain `max_attempts=3` total. No other work-type attempt default is approved; provider-specific notification retry limits remain pending under PP-008.
 - OPS-06 approves uploaded CSV and generated rejection-report bytes in a protected persistent local filesystem directory accessible to the API and worker, outside public/static delivery and excluded from Git. SQLite stores only opaque IDs and metadata for these artifacts, not their file contents as BLOBs. The backend resolves IDs under the configured storage root and never accepts a path from a client. Follow the publication/DB-reference/orphan-reconciliation invariant in §5.1.
 
 ## 8. Retention, backup, and migrations
 
 - **Operational history:** retain synthetic source records, classifications/attempts, detection results/evidence, incidents/events, conflicts, audit history, notification content/attempts, and evaluation evidence through the capstone period. OPS-03 approves that expectation; it is not a production retention policy.
-- **Staged uploads and preview rows:** artifact storage is Approved under OPS-06; expiry/retention duration remains unresolved under OPS-03. Keep upload files, generated rejection reports, and row-level reasons available for the approved preview/confirmation and rejection-report workflow. Preview rows referenced by audit_events for reference provenance cannot be deleted while those audit records are retained. Define artifact expiry, report regeneration/deletion behavior, deletion order, and audit effect in API_SPEC.yaml/OPS runbook before implementation.
+- **Staged uploads and preview rows:** OPS-03 approves retaining synthetic upload files, generated rejection reports, preview data, row-level reasons, and associated audit evidence through the capstone period without automatic per-artifact expiry. Remove artifacts only through the documented synthetic reset/reseed after a coherent backup and reference/audit checks. Preview rows referenced by audit_events for reference provenance cannot be deleted while those audit records are retained.
 - **Sessions and provider details:** session expiry configuration belongs in SECURITY.md. Provider request IDs and usage data are retained for traceability; no credentials are persisted.
-- **Backups:** include the SQLite database and all referenced artifact files in the same consistent recovery set under OPS-06. Do not copy only the main database file while WAL writes are active or mix artifacts from another snapshot. Follow the coordinated quiesce/snapshot/restore/integrity procedure in TECH_STACK.md; verify database integrity, foreign keys, artifact-ID resolution, and stored file hashes before restart. Backup cadence, retention, and exact mechanism remain open under OPS-03.
-- **Migrations:** versioned schema migrations are approved at the approach level. SQLAlchemy 2.x and Alembic remain Proposed and require separate approval. Migration implementation must preserve IDs, hashes, foreign keys, unique identities, append-only history, and the single-file SQLite constraint. No migration tool or migration script is generated by this document.
+- **Backups:** include the SQLite database and all referenced artifact files in the same consistent recovery set under OPS-06. Before every migration and reset/reseed, quiesce API/worker writes and artifact mutations, use Python's SQLite `Connection.backup()` API, and capture the referenced artifacts from the same quiesced set. Do not copy only the main database file while WAL writes are active or mix artifacts from another snapshot. Follow the restore/integrity procedure in TECH_STACK.md; verify database integrity, foreign keys, artifact-ID resolution, and stored file hashes before restart. Deployment-specific periodic cadence and backup retention remain open under OPS-03.
+- **Migrations:** versioned schema migrations are approved at the approach level; SQLAlchemy 2.x and Alembic 1.x were approved under PP-001. Migration implementation must preserve IDs, hashes, foreign keys, unique identities, append-only history, and the single-file SQLite constraint. No migration tool or migration script is generated by this document.
 - **Compatibility:** pin and verify the SQLite runtime version needed for foreign keys, WAL, CHECK constraints, and partial unique indexes before deployment. Do not select a hosting provider here.
 
 ## 9. Mapping to PRD requirements
@@ -971,37 +980,37 @@ These are carried forward, not approved by this document.
 | DAI-06 source/classification coverage granularity, completeness, calibration parameters | Method Approved; parameters Pending Calibration | Non-definitive classifications are excluded from confirmed defect counts; the approved DAI-06 policy determines coverage sufficiency. detection_results stores immutable policy version, source-coverage state, and observed/baseline classification completeness/counts. Exact scope, interval aggregation, completeness rules, and calibration remain pending; automatic detection stays disabled until approval. |
 | PB-09 detection identity/application/history rules | Approved design decisions; document review pending | Fingerprint inputs and application state are stored on detection_results. Historical result snapshots never apply incident/outbox changes; current results use recoverable, idempotent application. No PB-01 or DAI-06 calibration values are approved. |
 | PB-06 unresolved supplier/batch linkage | Approved | Store LINKAGE_PENDING; allow distinctly labelled product-level analytics only when product identity is valid; never create product-only incidents or automatic notifications from those records. |
-| DAI-01 upload/reference templates and mapping precedence | Approved approach; exact API contracts downstream | Template version and preview snapshots are persisted; file formats and mapping resolution contract belong in API_SPEC.yaml. |
-| DAI-08 interactive CSV column mapping | Approved | upload_previews stores the validated Admin-supplied source-column mapping snapshot; required targets are unique and complete, optional source columns may be IGNORE, and mapping/file changes require a new preview bound to the verified hash. |
+| DAI-01 parser/templates/mapping precedence | Approved | API contract versions, byte/row limits, UTF-8/BOM, timestamp, field/ID handling, and DAI-01 mapping precedence are explicit; preview rows preserve the exact validated values. |
+| DAI-08 interactive CSV column mapping | Approved | upload_previews stores the Admin-supplied source-column mapping snapshot with file hash, parser version, request idempotency key/fingerprint; required targets are unique/complete, optional source columns may be IGNORE, and mapping/file changes require a new preview. |
 | ARC-08 role-visible readiness projection | Approved | Readiness is derived at the API boundary; no new database table or persistent field is required. Exact degradation thresholds and provider-health assessment parameters remain pending for the operations specification. |
 | OPS-06 uploaded CSV and rejection-report artifact storage | Approved | Store file bytes in protected persistent local filesystem storage; SQLite stores opaque IDs and metadata only. Publish atomically before committing references, reconcile only unreferenced orphans, and include database plus referenced files in a consistent recovery set. |
-| OPS-03 artifact/preview/rejection-report expiry and retention | Open | Keep artifacts available for approved preview/confirmation and rejection-report use; define expiry, deletion ordering, and audit effects in API_SPEC.yaml/operations specifications. |
+| OPS-03 artifact/preview/rejection-report expiry and retention | Approved for capstone synthetic data | Retain uploads, previews, row reasons, rejection reports, and associated audit evidence through the capstone period without automatic per-artifact expiry; reset/reseed cleanup requires a coherent backup and reference/audit checks. |
 | ARC-03 data access and migration tools | Approved: SQLAlchemy 2.x and Alembic 1.x for SQLite and versioned migrations | This document remains tool-neutral; use the approved tooling without changing the schema contracts or SQLite-only design. |
-| ARC-03/ARC-04 busy timeout and contention behavior | Required constraints documented; exact parameters open | Numeric busy timeout, SQLITE_BUSY response/retry and query tuning remain implementation-specification choices. |
-| ARC-04 leases, stale claims, worker recovery | One durable SQLite-backed worker Approved; notification uncertain-outcome recovery specified | Background-job lease fields remain candidate state; job claim transaction, token semantics, expiry/renewal/recovery remain open. Notification OUTCOME_UNKNOWN reconciliation follows ALERT_SPEC.md. |
-| OPS-02 retries and reconciliation | Bounded retry/reconciliation approach Approved; numbers/cadence open | max_attempts and next_attempt_at persist the selected policy; numeric values and schedule are not set here. |
-| OPS-03 retention and backup | Capstone retention/recovery approach Approved; exact parameters open | No automatic retention purge is specified; backup cadence, retention, and mechanism remain open. |
+| ARC-03/ARC-04 busy timeout and contention behavior | PP-007 approved | Use a 5-second busy timeout and up to 2 additional `SQLITE_BUSY` retries after rollback, with short transactions and no retry of non-idempotent side effects. |
+| ARC-04 leases, stale claims, worker recovery | PP-007 approved; notification uncertain-outcome recovery specified | Claim one item at a time with a 5-minute lease renewed every 60 seconds, including during provider calls; poll every 5 seconds, reconcile at startup and every 60 seconds, and reject stale-owner writes. Notification `OUTCOME_UNKNOWN` reconciliation follows ALERT_SPEC.md. |
+| OPS-02 retries and reconciliation | PP-007 approved with per-type budgets preserved | Use 5/15/45-second delays for eligible retries. `max_attempts=3` remains scoped to PP-014-created classification work. Other job-type budgets are not defaulted; notification-specific limits remain under PP-008. |
+| OPS-03 retention and backup | Development policy approved; deployment-specific parameters deferred | Retain synthetic artifacts through the capstone period without automatic per-artifact expiry. Back up before every migration and reset/reseed using a quiesced SQLite backup plus referenced artifacts. Deployment-specific periodic cadence and backup retention remain open. |
 | DAI-05 model identifier and final classification contract | Selection method Approved; model ID/schema details open | Store actual model, prompt, and schema versions per attempt; no model is selected. |
 | DAI-04 taxonomy changes/reclassification and cross-version identity | Approved | Preserve the taxonomy version on each attempt; group only explicitly equivalent issue meanings by stable logical_defect_id. Changed meanings use a new ID; no automatic merge or blanket historical reclassification is implied. |
-| SEC-01 session settings/account recovery | Authentication approach Approved; settings open | Session rows support expiry/revocation; exact cookie/session/account recovery policy belongs in SECURITY.md. |
+| SEC-01/02 session settings/account recovery/email identity | Approved 22 November 2026 | users and sessions store canonical email identity, Argon2id hash, forced-change state, absolute expiry, idle activity, and revocation; Security/API specify cookie and CSRF controls. |
 | ARC-05 recipient directory, route/fallback details, email sink | Sandbox/local adapter boundary Approved; concrete details open | Recipient groups/rules and exact snapshots are represented; route precedence, fallback and provider remain for ALERT_SPEC.md. |
 | PB-04 notification edge cases | Fixed 86,400-second cooldown per incident/severity across all routes, escalation bypass, and SYSTEM_DECISION suppression audit Approved; timestamp anchor and re-crossing/severity-decrease/recurrence details remain open | Persist event kind, rule version, incident, severity, and suppression decision; do not encode unapproved edge behavior. |
 | ARC-07 external uncertain-send handling | Local incident/outbox atomicity and conservative uncertain-outcome recovery Approved | Expired SENDING with a still-QUEUED attempt returns to QUEUED; abandoned IN_PROGRESS becomes OUTCOME_UNKNOWN and is not automatically resent without provider verification or an approved policy. Provider verification capabilities remain open. |
 | PB-05 metric definitions | Shared glossary creation Approved; definitions not approved | Store source facts and derived detection results; do not treat dashboards or derived rates as approved definitions. |
-| Email normalization and SQLite runtime | Not selected | Choose email canonicalization and supported SQLite version in the security/implementation specifications. |
+| SQLite runtime | Not selected | Pin a supported SQLite runtime before implementation; do not weaken schema invariants if the runtime lacks required constraints/indexes. |
 | Artifact-ID generation details | OPS-06 approach approved | Use server-generated opaque IDs resolved only by backend code; exact identifier format and API behavior are implementation details and must not expose filesystem paths. |
 | Synthetic seed manifest format | Not specified | Seeded records need stable source identities and an origin manifest reference; define the manifest when the data generator is specified. |
-| Source-ID normalization | Not specified | Define case/whitespace/Unicode handling in the ingestion contract before enforcing identity uniqueness or computing stable payload hashes. |
+| Source-ID normalization | Approved 22 November 2026 | Preserve exact decoded IDs; reject empty, whitespace-only, and leading/trailing whitespace; no trim/case-fold/Unicode normalization. |
 
 ## 11. Consistency review and known specification gaps
 
-The prior v1.1 model was checked against PRD v1.6, Decision Register v0.9, Tech Stack v0.7, Architecture v1.3, API_SPEC.yaml v1.0.0, and AI_SPEC.md v1.0. The v1.2 draft added detection fingerprint/rationale/recovery fields and the Alert Specification's authorized retry, crash-recovery, cooldown-audit, and routing-provenance contracts. The v1.3 draft added the immutable CSV mapping snapshot; v1.4 records the approved DAI-08 mapping semantics and ARC-08 projection decision. Readiness and retry eligibility remain API-derived projections. The model preserves the single-writer architecture, source identity uniqueness, immutable feedback, explicit source coverage, deterministic evidence, incident lifecycle, notification snapshots, and ARC-07 atomicity. OPS-06's protected local artifact storage and coordinated recovery decisions remain unchanged.
+The prior v1.1 model was checked against earlier PRD/register/spec revisions. Intermediate v1.2-v1.4 revisions recorded detection/alert recovery and approved CSV mapping/ARC-08 updates; v1.5 incorporates the approved PP-003 and PP-004 account, parser, preview, and conflict details. It preserves the single-writer architecture, source identity, immutable feedback, traceability, detection gates, incident lifecycle, notification snapshots, and ARC-07 atomicity. OPS-06 artifact storage is unchanged.
 
 ### Data-model review status
 
-The prior Approved v1.1 baseline had no identified structural blocker. The v1.2 detection and alert-recovery fields and v1.3/v1.4 mapping updates are included in this v1.4 Approved — Design Baseline, subject to the conditions recorded here; approval does not resolve calibration or operational decisions. DAI-08 and ARC-08 remain Approved decisions. PB-06 continues to bound unresolved-link handling: valid `LINKAGE_PENDING` records may appear in labelled product-level analytics, but cannot create product-only incidents or automatic notifications; incident-capable clusters require fully resolved product, supplier, batch, and logical-defect identity. Artifact expiry/retention and exact backup cadence/mechanism remain downstream OPS-03 details and do not alter the approved relational artifact representation.
+The prior Approved v1.1 baseline had no identified structural blocker. v1.5.2 includes the approved authentication/account fields, parser/preview/conflict contracts, and PP-007 operational policy while preserving calibration and deployment-specific dependencies. DAI-08 and ARC-08 remain Approved. PB-06 continues to bound unresolved-link handling. Deployment-specific periodic backup cadence and backup retention remain open under OPS-03.
 
-Other downstream dependencies remain open: coverage scope/completeness parameters and PB-01 thresholds remain Pending Calibration; artifact and preview expiry, lease duration/reconciliation cadence, retry counts/backoff/error taxonomy, busy-timeout duration, backup cadence/retention/mechanism, and provider verification support for uncertain outcomes remain for their existing downstream specifications.
+Other downstream dependencies remain open: coverage scope/completeness parameters and PB-01 thresholds remain Pending Calibration; other job-type retry budgets, provider-specific notification retry limits, provider verification support for uncertain outcomes, deployment-specific periodic backup cadence/retention, and SQLite runtime verification before deployment remain for their owning specifications.
 
-Version 1.1 was the previous Approved baseline. Version 1.4 is the current conditional Approved — Design Baseline; its incorporated v1.2 and v1.3 changes are not separate approvals. Other pending calibration and operational decisions remain unchanged.
+Version 1.5.1 was the previous approved conditional baseline; v1.5.2 is the current conditional Approved — Design Baseline with PP-014's `max_attempts=3` queue snapshot and the PP-007 operational policies recorded above. Other pending calibration and deployment-specific operational decisions remain unchanged.
 

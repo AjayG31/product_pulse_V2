@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("PP-010", "PP-011", "PP-023")]
+    [ValidateSet("PP-010", "PP-011", "PP-012", "PP-013", "PP-014", "PP-023")]
     [string]$Ticket,
 
     [string]$EvidencePath
@@ -11,7 +11,8 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 
 if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
-    $EvidencePath = "docs/evidence/m1/$Ticket.txt"
+    $evidenceMilestone = if ($Ticket -in @("PP-012", "PP-013", "PP-014")) { "m2" } else { "m1" }
+    $EvidencePath = "docs/evidence/$evidenceMilestone/$Ticket.txt"
 }
 $evidenceFile = Join-Path $repoRoot $EvidencePath
 $evidenceDirectory = Split-Path -Parent $evidenceFile
@@ -87,6 +88,19 @@ try {
         }
     }
 
+    function Invoke-BanditCheck {
+        param([Parameter(Mandatory = $true)][string]$Name)
+
+        $previousLocalAppData = $env:LOCALAPPDATA
+        $env:LOCALAPPDATA = Join-Path $repoRoot ".tools/cache/appdata"
+        New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+        try {
+            Invoke-ExternalCheck -Name $Name -FilePath $uvPath -Arguments @("run", "--locked", "bandit", "-r", "productpulse")
+        } finally {
+            $env:LOCALAPPDATA = $previousLocalAppData
+        }
+    }
+
     switch ($Ticket) {
         "PP-010" {
             $pythonTests = @(
@@ -100,19 +114,60 @@ try {
             Invoke-ExternalCheck -Name "PP-010 pytest / FastAPI TestClient" -FilePath $uvPath -Arguments (@("run", "--locked", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", $pytestBase) + $pythonTests)
             Invoke-ExternalCheck -Name "PP-010 Vitest / React Testing Library" -FilePath $npmPath -Arguments @("run", "test")
             Invoke-ExternalCheck -Name "PP-010 frontend production build" -FilePath $npmPath -Arguments @("run", "build")
-            Invoke-ExternalCheck -Name "PP-010 Bandit" -FilePath $uvPath -Arguments @("run", "--locked", "bandit", "-r", "productpulse")
+            Invoke-BanditCheck -Name "PP-010 Bandit"
             Invoke-ExternalCheck -Name "PP-010 pip-audit" -FilePath $uvPath -Arguments @("run", "--locked", "pip-audit")
             Invoke-ExternalCheck -Name "PP-010 npm audit" -FilePath $npmPath -Arguments @("audit")
         }
         "PP-011" {
             Invoke-ExternalCheck -Name "PP-011 deterministic synthetic corpus generation" -FilePath $uvPath -Arguments @("run", "--locked", "python", "-m", "productpulse.datasets.generate", "--output", "data/dev")
             Invoke-ExternalCheck -Name "PP-011 pytest" -FilePath $uvPath -Arguments @("run", "--locked", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", $pytestBase, "tests/test_synthetic_data.py")
-            Invoke-ExternalCheck -Name "PP-011 Bandit" -FilePath $uvPath -Arguments @("run", "--locked", "bandit", "-r", "productpulse")
+            Invoke-BanditCheck -Name "PP-011 Bandit"
             Invoke-ExternalCheck -Name "PP-011 pip-audit" -FilePath $uvPath -Arguments @("run", "--locked", "pip-audit")
+        }
+        "PP-012" {
+            $pythonTests = @(
+                "tests/test_settings.py",
+                "tests/test_logging_config.py",
+                "tests/test_database.py",
+                "tests/test_health.py",
+                "tests/test_migrations.py",
+                "tests/test_auth.py"
+            )
+            Invoke-ExternalCheck -Name "PP-012 pytest / FastAPI TestClient" -FilePath $uvPath -Arguments (@("run", "--locked", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", $pytestBase) + $pythonTests)
+            Invoke-ExternalCheck -Name "PP-012 Vitest / React Testing Library" -FilePath $npmPath -Arguments @("run", "test")
+            Invoke-ExternalCheck -Name "PP-012 frontend production build" -FilePath $npmPath -Arguments @("run", "build")
+            Invoke-BanditCheck -Name "PP-012 Bandit"
+            Invoke-ExternalCheck -Name "PP-012 pip-audit" -FilePath $uvPath -Arguments @("run", "--locked", "pip-audit")
+            Invoke-ExternalCheck -Name "PP-012 npm audit" -FilePath $npmPath -Arguments @("audit")
+        }
+        "PP-013" {
+            $pythonTests = @(
+                "tests/test_settings.py",
+                "tests/test_logging_config.py",
+                "tests/test_database.py",
+                "tests/test_health.py",
+                "tests/test_migrations.py",
+                "tests/test_auth.py",
+                "tests/test_ingestion_preview.py"
+            )
+            Invoke-ExternalCheck -Name "PP-013 pytest / FastAPI TestClient" -FilePath $uvPath -Arguments (@("run", "--locked", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", $pytestBase) + $pythonTests)
+            Invoke-ExternalCheck -Name "PP-013 Vitest / React Testing Library" -FilePath $npmPath -Arguments @("run", "test")
+            Invoke-ExternalCheck -Name "PP-013 frontend production build" -FilePath $npmPath -Arguments @("run", "build")
+            Invoke-BanditCheck -Name "PP-013 Bandit"
+            Invoke-ExternalCheck -Name "PP-013 pip-audit" -FilePath $uvPath -Arguments @("run", "--locked", "pip-audit")
+            Invoke-ExternalCheck -Name "PP-013 npm audit" -FilePath $npmPath -Arguments @("audit")
+        }
+        "PP-014" {
+            Invoke-ExternalCheck -Name "PP-014 pytest / FastAPI TestClient" -FilePath $uvPath -Arguments @("run", "--locked", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", $pytestBase)
+            Invoke-ExternalCheck -Name "PP-014 Vitest / React Testing Library" -FilePath $npmPath -Arguments @("run", "test")
+            Invoke-ExternalCheck -Name "PP-014 frontend production build" -FilePath $npmPath -Arguments @("run", "build")
+            Invoke-BanditCheck -Name "PP-014 Bandit"
+            Invoke-ExternalCheck -Name "PP-014 pip-audit" -FilePath $uvPath -Arguments @("run", "--locked", "pip-audit")
+            Invoke-ExternalCheck -Name "PP-014 npm audit" -FilePath $npmPath -Arguments @("audit")
         }
         "PP-023" {
             Invoke-ExternalCheck -Name "PP-023 pytest" -FilePath $uvPath -Arguments @("run", "--locked", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", $pytestBase, "tests/test_incident_logic.py")
-            Invoke-ExternalCheck -Name "PP-023 Bandit" -FilePath $uvPath -Arguments @("run", "--locked", "bandit", "-r", "productpulse")
+            Invoke-BanditCheck -Name "PP-023 Bandit"
             Invoke-ExternalCheck -Name "PP-023 pip-audit" -FilePath $uvPath -Arguments @("run", "--locked", "pip-audit")
         }
     }

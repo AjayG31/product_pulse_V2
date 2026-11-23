@@ -1,13 +1,13 @@
 # ProductPulse Incident and Alert Specification
 
-**Version:** 0.2  
+**Version:** 0.3  
 **Status:** Draft for cross-document review; not approved for implementation  
-**Date:** 21 November 2026  
+**Date:** 22 November 2026  
 **Scope:** Incident lifecycle, automatic and manual notification behavior, durable delivery, audit, and API/database alignment.
 
 ## 1. Purpose and approval boundary
 
-This specification turns approved ProductPulse requirements and the user-authorized alert corrections dated 21 November 2026 into a downstream incident and email design. `docs/PRD.md` remains the product requirements source of truth. The current baseline includes PRD v1.6, Decision Register v1.4, Architecture v1.3, API_SPEC.yaml v1.4.0 and DATA_MODEL.md v1.4 (both Approved — Design Baselines, subject to documented conditions), UI_SPEC.md v0.3 (Approved — Design Baseline, subject to documented conditions), AI_SPEC.md v1.0, and DETECTION_SPEC.md v1.1 (Draft clarification; v1.0 remains its Approved design baseline).
+This specification turns approved ProductPulse requirements and user-authorized alert and PP-007 operational decisions into a downstream incident and email design. `docs/PRD.md` remains the product requirements source of truth. The current baseline includes PRD v1.7, Decision Register v2.0, Architecture v1.5, API_SPEC.yaml v1.5.2 and DATA_MODEL.md v1.5.2 (Approved — Design Baselines, subject to documented conditions), UI_SPEC.md v0.4.1 (Approved — Design Baseline, subject to documented conditions), AI_SPEC.md v1.0, and DETECTION_SPEC.md v1.1 (Draft clarification; v1.0 remains its Approved design baseline).
 
 This document does not activate detection thresholds, approve recipient routing, select an email provider, authorize real email, or claim that the unresolved choices below have product-owner approval. Approved behavior is labeled **Approved**. An implementation choice that needs a decision is labeled **Open**. Automatic notification activation remains gated by the calibration and operational dependencies in §18.
 
@@ -150,7 +150,7 @@ For a manual notification, the confirmation transaction atomically creates the `
 
 If no approved route can be resolved, preserve the incident/detection application and record the notification decision as `BLOCKED_NO_ROUTE` with no provider call. This is consistent with the existing status contract and PRD's no-send/surface-error rule. The incident itself must not be rolled back just because notification configuration is missing. If a route is valid but the sandbox/provider is unavailable, persist the incident and required `QUEUED` outbox event atomically; delivery health does not suppress the incident.
 
-The worker claims and updates rows in short SQLite transactions. It commits before email-adapter I/O and records the attempt outcome in a separate short transaction. No provider call, retry sleep, or network callback occurs within a transaction. API and worker share the same SQLite file; SQLite writer contention and lease/`SQLITE_BUSY` policy remain ARC-04 implementation details.
+The single worker polls durable jobs/outbox every 5 seconds and claims one item at a time in a short `BEGIN IMMEDIATE` transaction. The claim carries an owner token and a 5-minute lease, renewed every 60 seconds in a separate short transaction conditioned on that token, including while a long provider call is active. Stale-owner writes are rejected. The worker commits before email-adapter I/O and records the attempt outcome in a separate short transaction. No provider call, retry sleep, or network callback occurs within a transaction. SQLite uses a 5-second busy timeout and up to 2 additional `SQLITE_BUSY` retries after rollback. API and worker share the same SQLite file.
 
 ### 8.2 Stable identity
 
@@ -183,13 +183,13 @@ Provider attempt outcomes and the current outbox state are separate: an attempt 
 
 ### 9.1 Retry and failure handling
 
-OPS-02 approves bounded automatic retry for transient mail-provider errors, terminal failure visibility, Admin recovery/retry, idempotency, and scheduled reconciliation. Each bounded automatic retry appends a new `QUEUED` delivery-attempt row; prior attempt rows remain immutable. Permanent validation errors are not retried. Numeric attempt limits, backoff schedule, retryable error taxonomy, and reconciliation cadence remain open and must be set against the selected sink/provider before implementation. Do not retry indefinitely.
+OPS-02 approves bounded automatic retry for transient mail-provider errors, terminal failure visibility, Admin recovery/retry, idempotency, and scheduled reconciliation. PP-007 approves 5-, 15-, then 45-second retry delays for eligible retries and a 60-second worker reconciliation interval. Each bounded automatic retry appends a new `QUEUED` delivery-attempt row; prior attempt rows remain immutable. Permanent validation errors are not retried. Provider-specific notification attempt limits, retryable error taxonomy, and retry-eligibility mapping remain pending under PP-008 and must be reconciled with the selected sink/provider before notification integration. Do not retry indefinitely.
 
 Each failure records a safe error code and redacted summary. When the approved retry budget is exhausted, persist `FAILED` and expose it to authorized users/Admin operations. An authenticated Admin-only `POST /admin/notifications/{notification_id}/retry` operation retries eligible known-failed events. It requires session/CSRF protection and an `Idempotency-Key`; it keeps the original notification ID, event key, content, recipients, and history, appends a new `QUEUED` delivery-attempt row, writes an audit event, and returns the same notification on an idempotent replay. The worker changes that row to `IN_PROGRESS` before adapter I/O. It does not retry `OUTCOME_UNKNOWN` or a permanent validation failure. A retry is eligible only when the prior outcome is known not to have been accepted and its blocking cause is corrected. Error taxonomy and exact retry budget remain pending. A replay with the same idempotency key returns the same attempt and does not append another row.
 
 ### 9.2 Uncertain send recovery
 
-On process interruption or adapter timeout after a request may have left the process, persist the attempt as `OUTCOME_UNKNOWN` and the outbox as `OUTCOME_UNKNOWN`; do not relabel uncertainty as a known failure or acceptance. Expose the state in history and operations views.
+On process interruption or adapter timeout after a request may have left the process, persist the attempt as `OUTCOME_UNKNOWN` and the outbox as `OUTCOME_UNKNOWN`; do not relabel uncertainty as a known failure or acceptance. If the active provider call is long-running, renew its 5-minute lease every 60 seconds using a separate short transaction; no renewal or result update may succeed for a stale owner token. On an expired `SENDING` lease with a still-`QUEUED` attempt, clear the stale lease and return the outbox to `QUEUED` because no provider call started. An abandoned `IN_PROGRESS` attempt becomes `OUTCOME_UNKNOWN` and is never automatically resent without provider verification or a separately approved policy. Expose the state in history and operations views.
 
 
 ## 10. Audit logging and notification history
@@ -225,7 +225,7 @@ Non-definitive classifications are excluded from confirmed defect counts. DAI-06
 
 ## 13. API contract alignment
 
-API_SPEC.yaml v1.4.0 is an Approved — Design Baseline, subject to its documented implementation conditions; v1.1.0 was the previous approved API version. ARC-08 approves a role-visible readiness projection and DAI-08 approves the CSV mapping contract; neither decision nor conditional design approval activates detection or notification behavior.
+API_SPEC.yaml v1.5.2 is an Approved — Design Baseline, subject to its documented implementation conditions; v1.5.1 was the previous approved API version. ARC-08 approves a role-visible readiness projection and DAI-08 approves the CSV mapping contract; neither decision nor conditional design approval activates detection or notification behavior.
 
 | Contract surface | Alert behavior |
 |---|---|
@@ -242,12 +242,12 @@ The API status enum matches DATA_MODEL: `QUEUED`, `SENDING`, `ACCEPTED`, `FAILED
 
 ### 13.1 Contract gaps for downstream review
 
-- The approved conditional API baseline exposes an Admin-only retry_eligibility projection with safe reason codes; UI_SPEC v0.3 defines the client control. Provider reconciliation remains separate; retry limits and backoff are still open implementation dependencies.
+- The approved conditional API baseline exposes an Admin-only retry_eligibility projection with safe reason codes; UI_SPEC v0.4.1 defines the client control. PP-007 approves the shared 5/15/45-second retry-delay sequence and 60-second reconciliation interval. Provider-specific notification limits and retry eligibility still depend on PP-008 and sink selection.
 - API_SPEC.yaml has no provider callback operation. If the selected sink reports delivery/bounce callbacks, specify authentication, correlation, replay handling, and outbox update semantics in a provider-specific contract. `DELIVERED`/`BOUNCED` must remain unused when callbacks are unsupported.
 - Preview token persistence/expiry and repeated-preview behavior are explicitly unresolved between API_SPEC and SECURITY.md. No preview persistence table is defined in DATA_MODEL.md.
 - The route schema permits `routing_scope` and `routing_key` but its vocabulary, encoding, precedence, and fallback behavior are unresolved. The `BLOCKED_NO_ROUTE` data status exists, but route activation is gated pending the decision.
 - DATA_MODEL/API now preserve selected route/group/membership provenance with each notification; precedence, group combination, and address de-duplication remain open.
-- API_SPEC v1.4.0 identifies Decision Register v1.4 and is Approved — Design Baseline, subject to its documented conditions; v1.1.0 was the previous approved contract.
+- API_SPEC v1.5.2 identifies Decision Register v2.0 and is Approved — Design Baseline, subject to its documented conditions; v1.5.1 was the previous approved contract.
 
 ## 14. Data model contract alignment
 
@@ -262,7 +262,7 @@ DATA_MODEL.md §4.7–4.8 provides the logical records used here:
 
 Constraints to preserve include unique `event_key`, unique manual confirmation key, per-incident/per-severity cooldown shared across all routes at exactly 86,400 seconds, MANUAL actor/confirmation fields, AUTOMATIC null actor/confirmation fields, SENDING lease tuple, ACCEPTED/DELIVERED/BOUNCED timestamps, and OUTCOME_UNKNOWN without acceptance/delivery timestamps. One open incident per cluster and the immutable 30-day episode relation remain enforced. Retry reuses the notification row/event key and is audited; each accepted retry appends a new delivery-attempt row.
 
-The current model can represent the approved boundary but leaves route scope semantics, numeric retry parameters, callback behavior, provider verification for uncertain outcomes, worker lease duration/cadence, and retry reason-to-policy mapping open. DATA_MODEL v1.4 is an Approved — Design Baseline subject to those documented conditions; this document does not authorize a migration or alter its status.
+The current model can represent the approved boundary. PP-007 sets the 5-minute notification lease, 60-second renewal/reconciliation cadence, and shared retry-delay sequence. Route scope semantics, provider-specific notification attempt limits, callback behavior, provider verification for uncertain outcomes, retry reason-to-policy mapping, and external idempotency remain open under PP-008. DATA_MODEL v1.5.2 is an Approved — Design Baseline subject to documented conditions; this document does not authorize a migration.
 
 ## 15. Security and error handling
 
@@ -326,14 +326,14 @@ The following are not approved by this specification and must remain visible in 
 | Recipient directory and fallback target | SEC-03 approves sandbox-only Admin-managed directory; PRD §19.1 still requires formal approval of the final directory/fallback. No concrete inbox is selected. |
 | Concrete mail sink/provider, credentials, callback support | ARC-05 approves a sandbox/local capture boundary; provider and local-versus-hosted sink are not selected. No real external delivery. |
 | Uncertain-send recovery and provider idempotency | Approved recovery rule: expired SENDING with no attempt returns to QUEUED; abandoned IN_PROGRESS becomes OUTCOME_UNKNOWN; no automatic resend unless provider verification or a separately approved policy permits it. Provider lookup support and verified-outcome handling remain open; exactly-once cannot be claimed. |
-| Retry budget, backoff, retryable error taxonomy, retry eligibility reason mapping, reconciliation cadence | API_SPEC v1.4.0 specifies safe eligibility reason codes and UI_SPEC v0.3 consumes them. Numeric limits, backoff, reason-to-policy mapping, and cadence remain open under OPS-02. |
+| Retry limits and reason mapping | API_SPEC v1.5.2 specifies safe eligibility reason codes and UI_SPEC v0.4.1 consumes them. PP-007 approves 5/15/45-second retry delays and 60-second reconciliation. Provider-specific notification attempt limits, retryable-error taxonomy, and reason-to-policy mapping remain under PP-008. |
 | Preview-token persistence, expiry, replay, and session binding details | Open between API_SPEC and SECURITY.md; no preview table exists in DATA_MODEL. |
 | Provider callback authentication/correlation | Open and provider-dependent; no callback route is defined in API_SPEC. |
 | Route resolution and provenance | The actual selected rules, groups, and memberships are snapshotted. Precedence, group combination, duplicate-address handling, empty-group fallback, and scope-key encoding remain open; route activation must wait. |
-| DATA_MODEL.md v1.4 review | Detection and alert-recovery model is an Approved — Design Baseline, subject to documented conditions; v1.1 was the previous approved version. DAI-08 mapping semantics and ARC-08 readiness projection decisions remain Approved. |
-| API_SPEC v1.4.0 review | This Approved — Design Baseline includes Admin notification retry eligibility, the ARC-08 readiness projection, routing provenance, and DAI-08 interactive column mapping; documented implementation conditions remain. API_SPEC v1.1.0 was the previous approved contract. |
+| DATA_MODEL.md v1.5.2 review | Detection and alert-recovery model is an Approved — Design Baseline, subject to documented conditions; v1.5.1 was the previous approved version. DAI-08 mapping semantics, ARC-08 readiness projection, and PP-007 operational policies remain recorded. |
+| API_SPEC v1.5.2 review | This Approved — Design Baseline includes Admin notification retry eligibility, the ARC-08 readiness projection, routing provenance, DAI-08 interactive column mapping, and PP-007 worker/SQLite policy; documented implementation conditions remain. API_SPEC v1.5.1 was the previous approved contract. |
 | Evaluation gates EV-01/EV-02/EV-03 | Pending Calibration; required before final held-out evaluation, not resolved here. |
-| SQLite worker lease/`SQLITE_BUSY` and email-provider operation details | ARC-04/OPS-02 implementation details remain open; keep writes short and calls outside transactions. |
+| SQLite worker lease/`SQLITE_BUSY` and email-provider operation details | PP-007 approves the 5-second busy timeout, 2 additional `SQLITE_BUSY` retries, 5-minute lease, 60-second renewal, and out-of-transaction provider calls. Provider-specific notification retry limits, sink/routing, verification, and idempotency remain open under PP-008. |
 
 ### Implementation gate
 
@@ -341,8 +341,8 @@ Before implementing an alert feature, approve this specification and the depende
 
 ## 19. Cross-document consistency review
 
-This draft was checked against AGENTS.md, PRD v1.6, DECISION_REGISTER.md v1.4, ARCHITECTURE.md v1.3, DATA_MODEL.md v1.4, API_SPEC.yaml v1.4.0, UI_SPEC.md v0.3 (all Approved — Design Baselines subject to documented conditions), DETECTION_SPEC.md v1.1 (Draft clarification; v1.0 remains the Approved design baseline), AI_SPEC.md v1.0 (Approved design baseline), and TECH_STACK.md v0.7.
+This draft was checked against AGENTS.md, PRD v1.7, DECISION_REGISTER.md v2.0, ARCHITECTURE.md v1.5, DATA_MODEL.md v1.5.2, API_SPEC.yaml v1.5.2, UI_SPEC.md v0.4.1 (Approved — Design Baselines subject to documented conditions), DETECTION_SPEC.md v1.1 (Draft clarification; v1.0 remains the Approved design baseline), AI_SPEC.md v1.0 (Approved design baseline), and TECH_STACK.md v1.2.0.
 
 The corrections align classification exclusions and DAI-06 coverage gating, the 30-day recurrence, per-incident/per-severity cross-route cooldown and escalation bypass, manual confirmation, sandbox-only routing, atomic SQLite persistence, history, and uncertain-delivery recovery. A cooldown suppression is an audited `SYSTEM_DECISION`. Sandbox/provider unavailability does not suppress an incident or durable outbox event. Non-definitive classifications do not count as confirmed defects; DAI-06 decides coverage sufficiency, and automatic detection remains disabled pending approval/calibration.
 
-The remaining gaps are intentional: severity decrease/re-crossing and cooldown timestamp anchor, route precedence and fallback details, provider/sink selection, numeric retry parameters and reconciliation cadence, preview-token lifecycle, and provider verification for uncertain outcomes. ARC-08 and DAI-08 are Approved decisions; exact readiness degradation thresholds and provider-health assessment parameters remain pending for the operations specification. API_SPEC v1.4.0 and DATA_MODEL v1.4 are Approved — Design Baselines subject to documented conditions. This Alert Specification remains Draft and is not approved for implementation.
+The remaining gaps are intentional: severity decrease/re-crossing and cooldown timestamp anchor, route precedence and fallback details, provider/sink selection, provider-specific notification retry limits/error mapping, preview-token lifecycle, and provider verification for uncertain outcomes. PP-007 has fixed the shared 5/15/45-second retry-delay sequence and 60-second reconciliation interval; this does not set notification-provider attempt limits. ARC-08 and DAI-08 are Approved decisions; exact readiness degradation thresholds and provider-health assessment parameters remain pending for the operations specification. API_SPEC v1.5.2 and DATA_MODEL v1.5.2 are Approved — Design Baselines subject to documented conditions. This Alert Specification remains Draft and is not approved for implementation.

@@ -1,13 +1,13 @@
 openapi: 3.1.0
 info:
   title: ProductPulse REST API
-  version: 1.4.0
-  summary: Approved — Design Baseline reflecting approved readiness and CSV mapping decisions; conditional implementation dependencies remain.
+  version: 1.5.2
+  summary: Approved Design Baseline with PP-003/PP-004, PP-014 queue-attempt snapshot, and PP-007 worker/SQLite policies recorded; remaining calibration and deployment-specific dependencies stay conditional.
   description: |
-    Conditional design baseline approved on 21 November 2026, based on PRD v1.6,
-    Decision Register v1.4, Tech Stack v0.7, Architecture v1.3, and Data Model v1.4
+    Conditional design baseline updated on 22 November 2026, based on PRD v1.7,
+    Decision Register v2.0, Tech Stack v1.2.0, Architecture v1.5, and Data Model v1.5.2
     (Approved — Design Baseline; conditional implementation dependencies remain),
-    Detection Specification v1.1 (draft clarification), Alert Specification v0.2
+    Detection Specification v1.1 (draft clarification), Alert Specification v0.3
     (draft), and AI_SPEC v1.0. This conditional approval does not resolve other
     decisions marked Pending Calibration, Proposed, or Open and does not authorize
     activation of detection, notifications, or other functionality whose
@@ -53,17 +53,17 @@ tags:
 security:
   - sessionCookie: []
 x-contract-status: Approved — Design Baseline
-x-revision-date: 2026-11-21
-x-approval-date: 2026-11-21
-x-previous-approved-version: 1.1.0
+x-revision-date: 2026-11-22
+x-approval-date: 2026-11-22
+x-previous-approved-version: 1.5.0
 x-source-documents:
-  prd: PRD.md v1.6
-  decision_register: DECISION_REGISTER.md v1.4
-  tech_stack: TECH_STACK.md v0.7
-  architecture: ARCHITECTURE.md v1.3
-  data_model: DATA_MODEL.md v1.4, Approved — Design Baseline with conditional implementation dependencies; detection and alert specifications remain pending review
+  prd: PRD.md v1.7
+  decision_register: DECISION_REGISTER.md v2.0
+  tech_stack: TECH_STACK.md v1.2.0
+  architecture: ARCHITECTURE.md v1.5
+  data_model: DATA_MODEL.md v1.5.2, Approved — Design Baseline with conditional implementation dependencies
   detection_spec: DETECTION_SPEC.md v1.1, draft clarification; v1.0 remains approved baseline
-  alert_spec: ALERT_SPEC.md v0.2, draft; not approved for implementation
+  alert_spec: ALERT_SPEC.md v0.3, draft; not approved for implementation
 x-contract-decisions:
   approved-behavior:
     - Admin and Business User are the only MVP roles; authorization is enforced by the backend on every protected operation.
@@ -87,11 +87,17 @@ x-contract-decisions:
     - Incident transitions and notes are append-only and auditable; stale concurrent transitions return 409.
     - Manual notifications require preview and explicit confirmation, approved directory recipients, and an idempotency key.
     - The API and one worker share one SQLite database; artifact bytes are resolved only by backend code from opaque identifiers.
+    - Authentication uses Argon2id/argon2-cffi (19 MiB, 2 iterations, parallelism 1), the approved NFC 15-128 code-point policy, 30-minute idle/8-hour absolute sessions, concurrent sessions, and the host-only __Host-productpulse_session cookie.
+    - GET /auth/csrf bootstraps a 10-minute pre-login CSRF cookie/token; login validates matching cookie/header and exact same-origin Origin/Referer. Session mutations require session-bound CSRF; production CORS is same-origin.
+    - First Admin setup is one-time and protected. Admin-created/reset temporary passwords require change before normal use; reset/deactivation/change revokes sessions. Email normalization and login throttles follow the approved SEC-01/02 contract.
+    - CSV uploads are capped at 20,000,000 bytes and 50,000 logical data records; strict UTF-8 permits one leading BOM; five parser-contract versions, offset-aware millisecond UTC timestamps, exact IDs, and field limits follow DAI-01.
+    - DAI-02 preserves source rows: identical payloads are no-ops, changed payloads conflict and never overwrite. Reference conflicts use explicit KEEP_EXISTING, DISMISS, or guarded APPLY_INCOMING_REFERENCE with stale-state 409.
+    - Preview idempotency keys bind to request fingerprints; previews bind exact bytes/hash, parser version, mappings, and outcomes. Rejection reports are protected formula-safe UTF-8 CSV for rejected/conflicting rows only, excluding raw feedback and duplicate no-ops.
   pending-or-open:
-    - The PRD 20 MB upload limit does not define decimal MB versus MiB; exact byte ceiling remains open.
-    - Source identifier normalization, timestamp-without-offset handling, and parser contract version naming need review.
+
+
     - Exact readiness degradation thresholds and provider-health assessment parameters remain pending for the operations specification. Until readiness can be established using approved assessment parameters, the endpoint returns UNKNOWN.
-    - Repeated preview behavior, rejection-report CSV columns, and artifact/preview expiry and retention require review.
+    - OPS-03 retains synthetic uploads, previews, row reasons, rejection reports, and audit evidence through the capstone period without automatic per-artifact expiry. Cleanup is limited to documented synthetic reset/reseed after coherent backup and reference/audit checks. Deployment-specific backup cadence and backup retention remain open.
     - Coverage declaration writes are not exposed; seed/worker ownership and a future Admin declaration contract depend on DAI-06 scope and completeness decisions.
     - F16 evaluation datasets/reports, local verification and pre-merge checklist evidence (AC17), and rollback/health-check results (AC18), remain external engineering evidence; the API exposes no runtime endpoint for them.
     - PB-01 detection thresholds and minimum counts remain Pending Calibration; this contract sets no default values.
@@ -99,46 +105,156 @@ x-contract-decisions:
     - Cooldown timestamp anchor and same-severity re-crossing/severity-decrease edge cases remain pending clarification in ALERT_SPEC.md.
     - PB-05 definitions for active warnings, critical warnings, and products at risk remain unresolved; affected KPI values may be null with PENDING_DEFINITION.
     - Notification routing precedence, fallback directory, sink/provider, provider verification for uncertain sends, and external idempotency remain open. Expired SENDING claims with no started attempt return to QUEUED; abandoned IN_PROGRESS attempts become OUTCOME_UNKNOWN and are not automatically resent.
-    - Session expiry, password policy/recovery, cookie details beyond Secure/HttpOnly, and CSRF token lifecycle remain for SECURITY.md.
-    - Retry budgets, backoff, lease duration/reconciliation cadence, SQLITE_BUSY policy, rate limits, API versioning, and backup/retention parameters remain open.
+
+    - PP-007 approves a 5-second SQLite busy timeout with 2 additional `SQLITE_BUSY` retries after rollback; a 5-minute worker lease renewed every 60 seconds; 5-second worker polling; 60-second reconciliation; and 5/15/45-second eligible retry delays. PP-014-created classification work remains limited to 3 total attempts. Other work-type attempt budgets and provider-specific notification retry limits remain unresolved; the latter, routing, sink selection, and external idempotency remain gated under PP-008. Deployment-specific periodic backup cadence and backup retention remain open. Non-login route rate limits and API versioning are unaffected.
     - GET /incidents exposes its documented filter subset; category_code and source_type are not incident filters. The UI must visibly mark them as unapplied to incident rows, as allowed by PRD §6.2.
     - Taxonomy defaults are not approved by examples in the PRD; no taxonomy seed content is prescribed here.
   proposed-contract-details-for-review:
-    - A new preview Idempotency-Key represents a new immutable preview; a network retry with the same key returns the original preview.
-    - Rejection reports use UTF-8 CSV and include rejected/conflicting rows with safe reasons, not full feedback text.
+
+
     - Manual preview returns an opaque actor-bound preview token; confirming a token creates at most one outbox event.
     - Admin job/notification response retry_eligibility values are safe, server-derived display hints; retry commands always re-evaluate eligibility.
     - Paginated lists use page and page_size, with stable sort tie-breaks by primary identifier.
     - Date filters use inclusive from_utc and exclusive to_utc; page defaults/ranges and Idempotency-Key length bounds are practical contract proposals.
-    - UTF-8 CSV and explicit timezone offsets are draft parsing safeguards; offset-free timestamps remain for product/implementation review. Source columns must be explicitly mapped under DAI-08; optional unused source columns may be marked IGNORE.
-    - Cookie name, CSRF header name, preview token design, retry reason-code details, and several response shapes need implementation/security review.
+
+    - Manual preview token design, retry reason-code details, and several response shapes remain subject to their owning specifications.
     - Retry eligibility fields are Admin-only projections; retry commands still perform authoritative server-side checks.
+x-authentication-contract:
+  password:
+    algorithm: Argon2id
+    implementation: argon2-cffi
+    memory_kib: 19456
+    iterations: 2
+    parallelism: 1
+    policy:
+      normalization: Unicode NFC before validation/hash/verification
+      min_code_points: 15
+      max_code_points: 128
+      allow_spaces_and_unicode: true
+      reject_overlength_without_truncation: true
+      block_common_or_compromised_passwords: true
+      composition_rules: none
+      periodic_expiry: none
+    rehash_on_successful_login: true
+    benchmark_rule: Increase parameters if practical; never silently lower approved cost.
+  email_identity:
+    display_value: Trim outer ASCII whitespace and preserve entered casing.
+    normalized_value: Trim outer ASCII whitespace, Unicode NFC, lowercase IDNA ASCII domain, then case-fold the full address.
+    alias_rewriting: none
+  session:
+    idle_seconds: 1800
+    absolute_seconds: 28800
+    concurrent_sessions: allowed
+    token_storage: Store only a one-way hash of the opaque bearer.
+    rotate_on: [login, password_reset, password_change]
+  session_cookie:
+    name: __Host-productpulse_session
+    secure: true
+    http_only: true
+    same_site: Lax
+    path: /
+    domain: absent
+    expiry: No later than the remaining idle or absolute deadline.
+  csrf:
+    bootstrap_endpoint: GET /auth/csrf
+    prelogin_cookie: __Host-productpulse_prelogin_csrf
+    prelogin_cookie_attributes: [Secure, HttpOnly, SameSite=Strict, Path=/, no Domain]
+    prelogin_max_age_seconds: 600
+    login_requires_matching_cookie_and_header: true
+    origin_policy: Exact same-origin Origin; Referer only if Origin is absent.
+    session_token: Bind to server-side session; rotate on login/reset/change; require on every cookie-authenticated mutation.
+  cors:
+    production: same-origin only
+    cross_origin_credentials: disabled
+  account_lifecycle:
+    first_admin: One-time protected command, hidden prompt, fails if Admin already exists; never accept password via argv/environment/history/logs.
+    roles: [ADMIN, BUSINESS_USER]
+    deactivation: Revoke all active sessions atomically; no delete/reactivation.
+    recovery: Admin-assisted temporary password only; direct verified in-person handoff outside ProductPulse; force change before normal use; no recovery email.
+    password_change: Revoke existing sessions and establish one fresh session with rotated CSRF.
+  login_rate_limits:
+    failed_attempts_per_normalized_account: 10
+    account_window_seconds: 900
+    account_cooldown_seconds: 900
+    attempts_per_source_ip: 60
+    ip_window_seconds: 900
+    scope: login only
+    response: Generic failure; 429 includes Retry-After and does not disclose account existence.
+  security_events:
+    audit: [LOGIN_SUCCEEDED, LOGOUT, ACCOUNT_CREATED, ACCOUNT_DEACTIVATED, PASSWORD_RESET, PASSWORD_CHANGED, SESSION_REVOKED, AUTHORIZATION_DENIED]
+    failed_login_and_throttle: Restricted redacted security log; no email/IP/password/token/raw body.
+    audit_snapshot_exclusions: [email, password, password_hash, session_id, session_token, csrf_token, recovery_token, source_ip, provider_secret, raw_feedback, raw_request_body]
 x-csv-input-contract:
-  encoding: UTF-8
-  encoding-review-note: UTF-8 is a draft contract choice; accepted BOM behavior and any alternate encoding remain for review.
+  file_part_limit_bytes: 20000000
+  file_limit_interpretation: Decimal 20 MB, inclusive; enforce while streaming before parse.
   data_row_limit: 50000
+  row_counting: Logical CSV data records after one header; blank records count.
+  encoding: UTF-8 strict
+  bom: One optional UTF-8 BOM at byte offset zero; strip it before parsing the first header.
+  csv_dialect: RFC-4180-style; reject malformed file-level structure before creating preview.
+  parser_contract_versions:
+    REVIEWS: reviews-v1
+    RETURNS: returns-v1
+    PRODUCT_REFERENCE: product-reference-v1
+    SUPPLIER_REFERENCE: supplier-reference-v1
+    BATCH_REFERENCE: batch-reference-v1
+  parser_versioning: Increment the relevant contract version when parse, validation, or normalization semantics change.
   timestamp:
-    accepted_format: ISO 8601 date-time
-    storage_timezone: UTC
+    accepted_format: RFC 3339/ISO-8601 with Z or explicit offset
     timezone_offset_required: true
-    review_note: Requiring an explicit offset is a draft safety choice; PRD requires ISO 8601 and UTC event time but does not state behavior for offset-free values.
+    maximum_fractional_digits: 3
+    normalize_to: UTC fixed milliseconds
+    reject_offset_free_or_excess_precision: true
+    do_not_guess_or_round: true
+  field_limits:
+    feedback_text_code_points: 16384
+    identifier_code_points: 256
+    other_mapped_text_code_points: 1024
+    decoded_field_utf8_bytes: 65536
+    truncation: forbidden
   source_identity:
     uniqueness: Global pair of source_type and source_record_id.
-    identical_payload: No-op; do not create a second source record.
-    changed_payload: Create an Admin-visible conflict; never overwrite original feedback.
-    normalization: Leading/trailing whitespace, case folding, and Unicode normalization remain unresolved; do not silently normalize identifiers.
+    normalization: Preserve exact decoded Unicode code points; case-sensitive; no trim, case-fold, or Unicode normalization.
+    reject: [empty, whitespace_only, leading_or_trailing_whitespace]
+    identical_payload: DUPLICATE_NOOP; do not create a second source record.
+    changed_payload: SOURCE_PAYLOAD conflict; never overwrite original source text or event time.
+    within_file: First valid row is candidate; later identical payload is DUPLICATE_NOOP; later different payload is CONFLICT.
+    payload_hash: SHA-256 of canonical validated fields after timestamp normalization; preserve source text and IDs exactly.
   linkage:
-    precedence: Use valid identifiers supplied in the feedback row first; otherwise use explicit imported reference data as approved by DAI-01.
+    precedence: Use valid identifiers supplied in feedback row first; otherwise use explicit imported reference data as approved by DAI-01.
     unresolved: Preserve otherwise-valid rows as LINKAGE_PENDING; label product-level analytics only when product_id is valid; create no product-only incident or automatic notification.
     conflict: Conflicting mappings are surfaced for Admin review and are never last-write-wins.
+  reference_conflicts:
+    KEEP_EXISTING: Mark reviewed/resolved with no data change.
+    DISMISS: Mark dismissed with no data change.
+    APPLY_INCOMING_REFERENCE: Apply only validated incoming fields when expected existing-value hash matches; apply atomically and audit before/after provenance; stale state returns 409.
+    source_payload_apply: forbidden
   column_mapping:
-    description: Approved under DAI-08; every mapping is Admin-submitted and server-validated against the uploaded CSV.
-    unit: One mapping per source-column index and exact header text in the uploaded file.
-    target: Map each source column to one canonical field allowed for the upload_kind; optional source columns may be explicitly marked IGNORE.
-    required_fields: Every required canonical target in the selected template must be mapped exactly once.
-    uniqueness: Each required canonical target is mapped exactly once; no canonical target is mapped by two source columns; a source-column index appears once.
-    confirmation: A preview with a missing required-target mapping cannot be confirmed and cannot create an ingestion job.
-    persistence: Store the validated canonical mapping snapshot in the immutable upload preview bound to the preview identity and verified file hash; any mapping or file change requires a new validated preview.
+    description: Admin-submitted and server-validated under DAI-08.
+    unit: One mapping per source-column index and exact header text in uploaded file.
+    target: Map each source column to one canonical field allowed for upload_kind; optional source columns may be marked IGNORE.
+    required_fields: Every required canonical target in selected template must be mapped exactly once.
+    uniqueness: No target is mapped by two source columns; source-column index appears once.
+    confirmation: Missing required mapping blocks confirmation and job creation.
+    persistence: Immutable mapping snapshot bound to preview and exact verified file hash; changed file/mapping requires new preview.
+  preview_integrity:
+    idempotency: Same Idempotency-Key and canonical request returns original preview; same key with changed request returns 409; a new key creates a new immutable preview.
+    request_fingerprint: SHA-256 of upload_kind, exact staged-byte SHA-256, and canonical mapping snapshot.
+    immutable_binding: [exact staged bytes/hash, parser_contract_version, canonical mapping snapshot, row outcomes/counts]
+    confirmation: Re-read and re-hash staged bytes; any mismatch fails closed.
+    state: READY when at least one eligible new row exists; INVALID when none are eligible.
+    malformed_file: 422 without creating a preview.
+    file_too_large: 413.
+    row_limit_exceeded: 422.
+  rejection_report:
+    content_type: text/csv; charset=utf-8
+    rows: [REJECTED, CONFLICT]
+    excluded_rows: [DUPLICATE_NOOP]
+    columns: [row_number, outcome, source_type_if_parsed, source_record_id_if_parsed, stable_reason_code, safe_explanation]
+    raw_feedback: excluded
+    formula_safety: Escape formula-leading user-controlled values.
+    available_only_when_rejections_or_conflicts_exist: true
+    artifact_expiry_retention: Retain synthetic artifacts through the capstone period with no automatic per-artifact expiry; cleanup only through documented synthetic reset/reseed after backup and reference/audit checks.
   templates:
     REVIEWS:
       required_headers: [review_id, product_id, supplier_id, batch_id, review_timestamp, review_text]
@@ -166,7 +282,6 @@ x-csv-input-contract:
       required_headers: [batch_id, product_id, supplier_id]
       optional_headers: []
   review-items:
-    - Exact parser contract version strings remain open.
     - Reference rows may establish or update entity values only through explicit reviewed imports; conflicting identifiers are not silently overwritten.
 paths:
   /health:
@@ -243,12 +358,44 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/InternalServerError'
+  /auth/csrf:
+    get:
+      operationId: bootstrapCsrf
+      tags: [Authentication]
+      summary: Bootstrap pre-login CSRF protection
+      description: >
+        Sets a host-only Secure, HttpOnly, SameSite=Strict, Path=/ pre-login CSRF
+        cookie with Max-Age=600 and returns its matching value for memory-only
+        browser use. This is not an authentication token.
+      security: []
+      x-required-roles: [PUBLIC]
+      x-decision-references: [SEC-01]
+      responses:
+        '200':
+          description: Pre-login CSRF token created.
+          headers:
+            Set-Cookie:
+              description: __Host-productpulse_prelogin_csrf with Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, Max-Age=600.
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreLoginCsrfResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        default:
+          $ref: '#/components/responses/InternalServerError'
   /auth/login:
     post:
       operationId: login
       tags: [Authentication]
       summary: Create an authenticated server-side session
-      description: Public login only; no self-registration. Success sets an opaque Secure, HttpOnly session cookie and returns the public user, never the session token or password hash.
+      description: Public login only; no self-registration. Requires the pre-login CSRF cookie/header and exact same-origin Origin/Referer validation. Success sets a Secure, HttpOnly, SameSite=Lax host-only session cookie and returns the public user and session-bound CSRF token, never the session bearer or password hash. A must_change_password account is restricted to session inspection, logout, and password change.
       security: []
       x-required-roles: [PUBLIC]
       x-prd-requirements: [F01, PRD 3.2, PRD 6.1]
@@ -269,7 +416,7 @@ paths:
           description: Credentials accepted and session established.
           headers:
             Set-Cookie:
-              description: Opaque session cookie. Exact expiry and SameSite policy belong in SECURITY.md.
+              description: Cookie is __Host-productpulse_session; Secure, HttpOnly, SameSite=Lax, Path=/, host-only, with expiry no later than the remaining 30-minute idle or 8-hour absolute deadline.
               schema:
                 type: string
           content:
@@ -282,6 +429,7 @@ paths:
                   email: admin@example.test
                   role: ADMIN
                   status: ACTIVE
+                  must_change_password: false
                   created_at: '2026-11-20T10:00:00Z'
                   updated_at: '2026-11-20T10:00:00Z'
                 csrf_token: <opaque-session-bound-token>
@@ -298,7 +446,7 @@ paths:
       operationId: getCurrentSession
       tags: [Authentication]
       summary: Return the current user and CSRF token
-      description: Returns the authenticated principal and session-bound CSRF token. Session duration and token rotation details remain in SECURITY.md.
+      description: Returns the authenticated principal and session-bound CSRF token. Sessions expire after 30 minutes idle or 8 hours absolute; forced-change users may only inspect session, log out, or change password.
       x-required-roles: [ADMIN, BUSINESS_USER]
       x-prd-requirements: [F01, PRD 3.2, PRD 6.1]
       x-acceptance-criteria: [AC01]
@@ -337,6 +485,50 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        default:
+          $ref: '#/components/responses/InternalServerError'
+  /auth/password-change:
+    post:
+      operationId: changeTemporaryPassword
+      tags: [Authentication]
+      summary: Change a temporary password
+      description: >
+        Available only to an authenticated account with must_change_password=true.
+        On success, stores the new Argon2id hash, clears the forced-change flag,
+        revokes all existing account sessions, and establishes one fresh session
+        with rotated cookie and CSRF token. Before completion the account can only
+        inspect its session, log out, or call this operation.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-required-roles: [ADMIN, BUSINESS_USER]
+      x-decision-references: [SEC-01, SEC-02]
+      x-prd-requirements: [F01, PRD 3.2, PRD 6.1]
+      x-acceptance-criteria: [AC01]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+      responses:
+        '200':
+          description: Password changed; a fresh session cookie and CSRF token are issued.
+          headers:
+            Set-Cookie:
+              description: Rotated __Host-productpulse_session cookie with remaining approved lifetime.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
         default:
           $ref: '#/components/responses/InternalServerError'
   /dashboard/summary:
@@ -1243,7 +1435,7 @@ paths:
       operationId: downloadIngestionTemplate
       tags: [Ingestion]
       summary: Download a CSV template
-      description: Review, return, and minimal product/supplier/batch reference template columns are summarized in the top-level x-csv-input-contract extension; parser version strings remain open.
+      description: Review, return, and minimal product/supplier/batch reference template columns are summarized in the top-level x-csv-input-contract extension; parser contract versions are listed there and increment when parsing, validation, or normalization semantics change.
       x-required-roles: [ADMIN]
       x-prd-requirements: [F02, F07, PRD 6.7, PRD 7.1, PRD 7.2]
       x-acceptance-criteria: [AC02, AC19]
@@ -1282,24 +1474,21 @@ paths:
       tags: [Ingestion]
       summary: Upload a CSV and create an immutable validation preview
       description: >
-        Validates file type/encoding, the Admin-selected source-column mapping,
-        timestamps, identifiers, duplicates, changed-payload conflicts, and
-        mapping consistency. Under approved DAI-08, each source column is
-        mapped by index and exact header to one allowed canonical field; an
-        optional source column may be marked IGNORE. Each required template
-        target must map exactly once and no target may be mapped twice. A
-        preview missing a required target cannot be confirmed. The server
-        validates the mapping against the staged bytes and stores it with the
-        immutable preview identity and verified file hash. Any mapping or file
-        change requires a new validated preview.
-        Exact uploaded bytes are staged as a protected artifact and SHA-256
-        bound to an immutable preview. At most 50,000 data rows are parsed.
-        The PRD 20 MB limit applies, but its byte measurement convention is
-        unresolved. Unsupported extension/media type returns 415; malformed
-        encoding or file-level structure returns 422; parseable row-level
-        issues are captured in an immutable READY/INVALID preview. No source
-        feedback or ingestion job is committed before confirmation. Business
-        User calls fail before any file is stored.
+        Validates strict UTF-8/BOM, RFC-4180-style CSV structure, the Admin-selected
+        mapping, timestamps, exact identifiers, field lengths, duplicates, and
+        changed-payload/reference conflicts. File parts may not exceed 20,000,000
+        bytes; the inclusive limit is enforced while streaming before parsing.
+        At most 50,000 logical data records after the header are allowed, counting
+        blank records. Unsupported extensions return 415; oversized files return
+        413; row-limit excess or malformed file-level structure returns 422 and
+        creates no preview. Parseable row-level errors are recorded in the
+        immutable preview. Parser contract versions are selected by upload kind.
+        The preview binds the exact staged-byte SHA-256, parser version, canonical
+        mapping snapshot, and row outcomes/counts. Reusing Idempotency-Key with
+        the same canonical request returns the original preview; changed request
+        content with that key returns 409. A new key creates a new immutable
+        preview. No source feedback or ingestion job is committed before
+        confirmation. Business User calls fail before any file is stored.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -1498,11 +1687,15 @@ paths:
       tags: [Ingestion]
       summary: Download the preview rejection report
       description: >
-        Streams protected artifact bytes through an Admin-authorized route.
-        Draft proposal: UTF-8 CSV with REJECTED and CONFLICT rows, row number
-        and source identity when parsed, stable reason codes, and safe
-        explanation. Formula-leading values are escaped. Exact columns and
-        artifact retention remain open.
+        Streams protected artifact bytes through an Admin-authorized route as
+        formula-safe UTF-8 CSV. Include rejected and conflicting rows with row
+        number, outcome, parsed source type/identity when available, stable
+        reason code, and safe explanation. Omit raw feedback and DUPLICATE_NOOP
+        rows. Synthetic upload, preview, row-reason, and rejection-report artifacts
+        are retained through the capstone period without automatic per-artifact
+        expiry under OPS-03. Cleanup is limited to documented synthetic
+        reset/reseed after backup and reference/audit checks. Deployment-specific
+        periodic backup cadence and retention remain open.
       x-required-roles: [ADMIN]
       x-prd-requirements: [F02, F03, PRD 6.7, PRD 7.3, PRD 13.2]
       x-acceptance-criteria: [AC03, AC23]
@@ -1549,8 +1742,12 @@ paths:
         confirmation with the same mode returns the same job and cannot
         duplicate source rows. A review/return preview requires the Admin to
         select HISTORICAL_BATCH or INCREMENTAL_RESPONSES. After newly accepted
-        feedback is persisted, classification is automatically queued through
-        the corresponding OpenAI API. A different mode on repeat confirmation
+        feedback is persisted, one durable CLASSIFICATION work item is created
+        for the ingestion job in the same SQLite transaction. The item is
+        QUEUED with attempt_count 0 and max_attempts 3 (total claimed attempts,
+        including the initial attempt), per the scoped OPS-02 clarification.
+        Queue creation does not make a provider call; downstream worker execution
+        is outside this confirmation request. A different mode on repeat confirmation
         conflicts. Reference-data previews omit processing_mode. INVALID or
         EXPIRED previews cannot be confirmed. A preview with a missing required
         mapping also cannot be confirmed. No client path is accepted. Business
@@ -1559,7 +1756,7 @@ paths:
         - sessionCookie: []
           csrfToken: []
       x-required-roles: [ADMIN]
-      x-decision-references: [DAI-08]
+      x-decision-references: [DAI-07, DAI-08, OPS-02]
       x-prd-requirements: [F02, F03, F07, PRD 7.3]
       x-acceptance-criteria: [AC01, AC02, AC03, AC04, AC23]
       parameters:
@@ -1683,7 +1880,7 @@ paths:
       operationId: retryIngestionJob
       tags: [Ingestion]
       summary: Retry eligible failed ingestion work
-      description: Admin-only retry of eligible failed/unpersisted work with original identities and the original immutable processing_mode. Accepted rows and incidents are not duplicated. Business Users cannot retry ingestion. Numeric retry limits/backoff remain open under OPS-02.
+      description: Admin-only retry of eligible failed/unpersisted work with original identities and the original immutable processing_mode. Accepted rows and incidents are not duplicated. Business Users cannot retry ingestion. Eligible retries use PP-007's 5/15/45-second delay sequence; do not invent an attempt budget for a work type without an approved value. Classification work created by PP-014 remains limited to 3 total claimed attempts.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -1782,7 +1979,7 @@ paths:
       operationId: retryProcessingJob
       tags: [Processing]
       summary: Retry eligible failed processing work
-      description: Admin-only retry. Classification work retains the API path selected by the source ingestion job's immutable processing_mode; retries do not switch between Batch and Responses. Failed or uncertain classifications are never converted to NO_DEFECT. Numeric retry budgets/backoff remain open under OPS-02.
+      description: Admin-only retry. Classification work retains the API path selected by the source ingestion job's immutable processing_mode; retries do not switch between Batch and Responses. Failed or uncertain classifications are never converted to NO_DEFECT. PP-014-created classification work has 3 total claimed attempts and uses the first two PP-007 retry delays (5 and 15 seconds). No other work-type attempt budget is implied.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -1883,10 +2080,14 @@ paths:
       tags: [Reconciliation]
       summary: Record an explicit Admin conflict decision
       description: >
-        SOURCE_PAYLOAD conflicts may be retained or dismissed; original source
-        text cannot be overwritten. REFERENCE_MAPPING resolution requires an
-        explicit validated decision. Exact mapping-conflict application
-        semantics are downstream DAI-01/API details and remain for review.
+        SOURCE_PAYLOAD conflicts allow KEEP_EXISTING or DISMISS only; original
+        source text and event time cannot be overwritten. REFERENCE_MAPPING
+        supports KEEP_EXISTING (resolve without change), DISMISS (dismiss without
+        change), or APPLY_INCOMING_REFERENCE using only the immutable validated
+        preview row when expected_existing_value_hash still matches. Apply
+        atomically with before/after provenance audit; stale state returns 409.
+        Replays with the same idempotency key and request return the original
+        result; a changed request under that key conflicts.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -2630,7 +2831,7 @@ paths:
       operationId: createUser
       tags: [Administration]
       summary: Provision an application user
-      description: Admin-only. Initial password is sent only over TLS, securely hashed server-side, never returned/logged. Password and recovery policy remain for SECURITY.md.
+      description: Admin-only. initial_password is a compliant temporary password sent only over TLS, hashed server-side, never returned/logged; the created user must change it before normal use. Admin hands it directly to the verified user in person outside ProductPulse; no email delivery.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -2692,7 +2893,7 @@ paths:
       operationId: deactivateUser
       tags: [Administration]
       summary: Deactivate a user and revoke active sessions
-      description: Deactivation and session revocation occur together. Deletion and reactivation are outside this contract.
+      description: Deactivation and revocation of all active sessions occur atomically. Deletion and reactivation are outside this contract.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -2725,6 +2926,51 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/InternalServerError'
+  /admin/users/{user_id}/password-reset:
+    post:
+      operationId: resetUserPassword
+      tags: [Administration]
+      summary: Set a temporary password for a user
+      description: >
+        Admin-only. Sets a policy-compliant temporary password, marks the target
+        must_change_password, and revokes all target sessions atomically. The
+        password is never returned or emailed. The Admin must hand it directly
+        to the verified user in person outside ProductPulse.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-required-roles: [ADMIN]
+      x-decision-references: [SEC-01, SEC-02]
+      x-prd-requirements: [F01, PRD 3.2, PRD 6.1]
+      x-acceptance-criteria: [AC01]
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetUserPasswordRequest'
+      responses:
+        '200':
+          description: Temporary password set; public user representation returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        default:
+          $ref: '#/components/responses/InternalServerError'
   /admin/operations/summary:
     get:
       operationId: getAdminOperationsSummary
@@ -2734,8 +2980,10 @@ paths:
         Includes ingestion/background job counts and age, classification
         states, coverage/freshness, outbox states/failures, OpenAI usage,
         latency and estimated cost. Omits feedback text, prompts, secrets,
-        filesystem paths, API keys, and provider payloads. Retry and
-        reconciliation numeric policies remain open.
+        filesystem paths, API keys, and provider payloads. PP-007 sets worker
+        polling to 5 seconds, reconciliation to 60 seconds, and eligible retry
+        delays to 5/15/45 seconds; provider-specific notification retry limits
+        and ARC-08 readiness thresholds remain open.
       x-required-roles: [ADMIN]
       x-prd-requirements: [F04, F05, F06, F08, F11, F14, F15, PRD 6.7, PRD 13.3, PRD 16]
       x-acceptance-criteria: [AC07, AC08, AC10, AC11, AC16, AC24]
@@ -2856,19 +3104,19 @@ components:
     sessionCookie:
       type: apiKey
       in: cookie
-      name: productpulse_session
-      description: Opaque server-side session cookie. Secure and HttpOnly are required; lifetime and SameSite policy remain in SECURITY.md.
+      name: __Host-productpulse_session
+      description: Opaque server-side cookie; Secure, HttpOnly, SameSite=Lax, Path=/, no Domain. Idle expiry is 30 minutes and absolute expiry is 8 hours.
     csrfToken:
       type: apiKey
       in: header
       name: X-CSRF-Token
-      description: Session-bound CSRF token for state-changing cookie-authenticated requests. Issuance/rotation details remain in SECURITY.md.
+      description: Session-bound CSRF token required on every cookie-authenticated mutation; returned only in the explicit bootstrap/login/session/password-change flow.
   parameters:
     CsrfTokenHeader:
       name: X-CSRF-Token
       in: header
-      required: false
-      description: Required on authenticated state-changing requests. Login CSRF/Origin handling remains in SECURITY.md.
+      required: true
+      description: Required on login and authenticated state-changing requests. Login also requires the matching pre-login CSRF cookie and exact same-origin Origin/Referer validation.
       schema:
         type: string
         minLength: 1
@@ -3155,7 +3403,7 @@ components:
                 detail: Use a new key for a different request.
                 request_id: req_06
     PayloadTooLarge:
-      description: Upload exceeds the configured PRD 20 MB limit; exact byte convention remains open.
+      description: CSV file-part exceeds the inclusive 20,000,000-byte decimal 20 MB limit, checked while streaming before parsing.
       content:
         application/problem+json:
           schema:
@@ -3184,7 +3432,7 @@ components:
                 code: invalid_range
                 message: to_utc must be later than from_utc.
     RateLimited:
-      description: Rate limit exceeded; exact rate policy remains open.
+      description: Login rate limit exceeded; account/IP limits are documented in x-authentication-contract. Other route rate limits remain open. Retry-After is included.
       headers:
         Retry-After:
           schema:
@@ -3393,7 +3641,7 @@ components:
       additionalProperties: false
     User:
       type: object
-      required: [user_id, email, role, status, created_at, updated_at]
+      required: [user_id, email, role, status, must_change_password, created_at, updated_at]
       properties:
         user_id:
           type: string
@@ -3404,6 +3652,9 @@ components:
           $ref: '#/components/schemas/UserRole'
         status:
           $ref: '#/components/schemas/UserStatus'
+        must_change_password:
+          type: boolean
+          description: True for a temporary initial/reset password until changed; normal application routes are blocked.
         created_at:
           type: string
           format: date-time
@@ -3413,6 +3664,30 @@ components:
         deactivated_at:
           type: [string, 'null']
           format: date-time
+      additionalProperties: false
+    PreLoginCsrfResponse:
+      type: object
+      required: [csrf_token]
+      properties:
+        csrf_token:
+          type: string
+          description: Pre-login CSRF value; retain in memory only and send in X-CSRF-Token.
+      additionalProperties: false
+    PasswordChangeRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+        new_password:
+          type: string
+          minLength: 15
+          maxLength: 128
+          writeOnly: true
+          description: Unicode NFC-normalized policy; spaces/Unicode allowed; common/compromised-password blocklist applies.
       additionalProperties: false
     LoginRequest:
       type: object
@@ -3425,6 +3700,7 @@ components:
         password:
           type: string
           minLength: 1
+          maxLength: 128
           writeOnly: true
       additionalProperties: false
     LoginResponse:
@@ -4646,7 +4922,7 @@ components:
         file:
           type: string
           format: binary
-          description: CSV bytes. PRD limit is 20 MB and at most 50,000 rows; exact byte convention remains open.
+          description: CSV file part, maximum 20,000,000 bytes while streaming, and at most 50,000 logical data records after the header; blank records count.
         column_mappings:
           type: array
           minItems: 1
@@ -4886,7 +5162,7 @@ components:
         max_attempts:
           type: integer
           minimum: 1
-          description: Snapshot of the selected retry policy; numeric policy remains open under OPS-02.
+          description: For a CLASSIFICATION item created by PP-014, 3 total claimed attempts including the initial attempt, per the scoped OPS-02 approval; other job-type budgets remain open.
         scheduled_at:
           type: string
           format: date-time
@@ -4955,6 +5231,7 @@ components:
         max_attempts:
           type: integer
           minimum: 1
+          description: For a CLASSIFICATION item created by PP-014, 3 total claimed attempts including the initial attempt, per the scoped OPS-02 approval; other job-type budgets remain open.
         scheduled_at:
           type: string
           format: date-time
@@ -5054,11 +5331,27 @@ components:
         decision:
           type: string
           enum: [KEEP_EXISTING, APPLY_INCOMING_REFERENCE, DISMISS]
-          description: APPLY_INCOMING_REFERENCE is valid only for reference mappings and requires validated explicit values.
+          description: APPLY_INCOMING_REFERENCE is valid only for reference mappings and applies validated values from the immutable preview row.
+        expected_existing_value_hash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Required for APPLY_INCOMING_REFERENCE; must match the existing mapping value at decision time.
         resolution_note:
           type: string
           minLength: 1
           maxLength: 2000
+      allOf:
+        - if:
+            properties:
+              decision:
+                const: APPLY_INCOMING_REFERENCE
+            required: [decision]
+          then:
+            properties:
+              expected_existing_value_hash:
+                type: string
+                pattern: '^[0-9a-f]{64}$'
+            required: [expected_existing_value_hash]
       additionalProperties: false
     TaxonomyVersionState:
       type: string
@@ -5467,13 +5760,26 @@ components:
           type: string
           format: email
           maxLength: 320
+          description: Display value retains trimmed entered case; uniqueness uses approved normalized SEC-01 identity.
         role:
           $ref: '#/components/schemas/UserRole'
         initial_password:
           type: string
-          minLength: 1
+          minLength: 15
+          maxLength: 128
           writeOnly: true
-          description: Secure hash only at rest; strength requirements remain pending SECURITY.md.
+          description: Temporary Argon2id-policy password; user must change it before normal use. Hand it directly to the verified user outside ProductPulse; never email or return it.
+      additionalProperties: false
+    ResetUserPasswordRequest:
+      type: object
+      required: [temporary_password]
+      properties:
+        temporary_password:
+          type: string
+          minLength: 15
+          maxLength: 128
+          writeOnly: true
+          description: Argon2id-policy temporary password handed directly in person to the verified user by the Admin; never emailed or returned.
       additionalProperties: false
     DeactivateUserRequest:
       type: object
@@ -5725,7 +6031,7 @@ components:
       additionalProperties: false
     AuditStateSnapshot:
       type: object
-      description: Allow-listed safe state only. Never include raw feedback, email addresses, password hashes, session or CSRF tokens, API keys, arbitrary message content, provider payloads, filesystem paths, or raw exception text.
+      description: Allow-listed safe state only. Never include raw feedback, email addresses, source IPs, password hashes, session or CSRF/reset tokens, API keys, arbitrary message content, provider payloads, filesystem paths, raw request bodies, or raw exception text.
       properties:
         status:
           type: string

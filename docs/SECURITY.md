@@ -1,11 +1,11 @@
 # ProductPulse Security Specification
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Status:** Approved — Design Baseline  
-**Approval date:** 21 November 2026  
+**Approval date:** 22 November 2026  
 **Requirements source:** [PRD](PRD.md) v1.7  
-**Decision basis:** [Decision Register](DECISION_REGISTER.md) v1.7  
-**Related specifications:** [Architecture](ARCHITECTURE.md) v1.4 (Approved); [Data Model](DATA_MODEL.md) v1.4 (Approved — Design Baseline, conditional); [API](API_SPEC.yaml) v1.4.0 (Approved — Design Baseline, conditional); [UI](UI_SPEC.md) v0.3 (Approved — Design Baseline, conditional); [Tech Stack](TECH_STACK.md) v1.0; [AI](AI_SPEC.md) v1.0 (Approved — Design Baseline); [Alert](ALERT_SPEC.md) v0.2 (Draft); [Detection](DETECTION_SPEC.md) v1.1 (Draft clarification; v1.0 remains the Approved — Design Baseline).
+**Decision basis:** [Decision Register](DECISION_REGISTER.md) v1.8  
+**Related specifications:** Architecture v1.4 (Approved); Data Model v1.5 (Approved — Design Baseline, conditional); API_SPEC.yaml v1.5.0 (Approved — Design Baseline, conditional); UI_SPEC.md v0.4 (Approved — Design Baseline, conditional); Tech Stack v1.1; AI_SPEC.md v1.0 (Approved — Design Baseline); ALERT_SPEC.md v0.2 (Draft); DETECTION_SPEC.md v1.1 (Draft clarification; v1.0 remains the Approved — Design Baseline).
 
 ## 1. Purpose and approval boundary
 
@@ -13,7 +13,7 @@ This document defines the security boundary and records the details that must be
 
 SEC-01 approves secure email/password authentication, server-side sessions, secure password hashes, `Secure` and `HttpOnly` session cookies, CSRF protection, expiry and logout invalidation, protected first-Admin provisioning, no public self-registration or SSO, and Admin-managed creation/deactivation. SEC-02 approves the two-role, single-retailer, backend-enforced authorization boundary. SEC-03 approves an Admin-managed sandbox directory, no arbitrary or supplier recipients, and no real sending in the MVP. SEC-04 approves keeping source feedback in governed records and authorized evidence views while redacting it from logs and telemetry.
 
-This conditional design baseline does not select unapproved values, providers, libraries, or recovery flows. In particular, it does not settle the password policy, hashing algorithm and cost parameters, cookie lifetime, CSRF bootstrap, CORS origins, numeric rate limits, account recovery, preview-token lifetime, artifact retention, or deployment provider. Dependent implementation must wait for the decisions listed in §16. This approval does not authorize application code, migrations, real email, activation of detection/notifications, or deployment.
+The approved password, session, cookie, CSRF/CORS, initial Admin, account lifecycle/recovery, login-throttling, audit-event, and CSV parser choices are detailed in §§3-7, 9, and 12-13 below. This conditional design baseline does not authorize application code, migrations, real email, activation of detection/notifications, or deployment. Remaining dependencies are listed in §16.
 
 ## 2. Security boundary and data classification
 
@@ -26,7 +26,7 @@ Protect these data classes according to their purpose:
 | Data | Handling |
 |---|---|
 | Passwords, session bearer tokens, API keys, mail credentials | Never log, audit, include in response bodies, expose through browser JavaScript, or commit. Deliver the session bearer only through the configured `HttpOnly` cookie; persist passwords and session bearer tokens only as approved one-way hashes. Keep provider secrets in protected server-side configuration. |
-| CSRF, recovery, and manual-preview tokens | Never log or include in audit snapshots. Return only through the explicit API flow that needs the value over TLS; the UI may retain the session-bound CSRF value as specified. Hash/persistence, expiry, and replay rules for recovery and preview tokens remain subject to their open decisions. |
+| CSRF and manual-preview tokens | Never log or include in audit snapshots. Return only through the explicit API flow that needs the value over TLS; the UI may retain the session-bound CSRF value as specified. ProductPulse issues no recovery token or reset link; recovery uses the approved Admin-assisted temporary-password handoff. Preview-token persistence, expiry, and replay remain open under ALERT_SPEC.md. |
 | Original review/return text and preview rows | Keep only in governed source/preview stores needed for ingestion, traceability, and authorized investigation. Treat all text as untrusted. Exclude raw text from operational logs, traces, generic audit snapshots, and safe errors. |
 | Manual notification content and recipients | Use only in the approved sandbox workflow. Preserve the exact confirmed message and recipient snapshot in the protected notification record as required by the PRD. Exclude addresses and arbitrary message content from generic audit snapshots and logs. |
 | Upload and rejection-report bytes | Store in the approved protected local artifact directory, outside public/static delivery and Git. Resolve opaque IDs only on the backend. Include referenced artifacts with SQLite in one recovery set. |
@@ -44,43 +44,37 @@ Protect these data classes according to their purpose:
 
 ### 3.2 Password hashing
 
-- Store only a one-way, salted, adaptive password hash in `users.password_hash`. Never store or log a clear-text password, reversible password value, or password in an audit snapshot.
-- Use a maintained password-hashing implementation; do not implement a custom hash scheme. The algorithm, parameters, dependency, and any rehash-on-login policy must be selected and recorded before authentication implementation.
-- Compare submitted credentials using the selected library's safe verification function. Keep hash metadata sufficient to identify the scheme and parameters for later upgrades.
-- Apply the same password handling to initial Admin provisioning and Admin-created users. `initial_password` is write-only, sent only over TLS, cleared from UI state after submission, hashed server-side, and never returned.
-- Do not infer a minimum length, maximum length, composition rule, breached-password check, password age, or first-login change requirement. These are open policy choices in §16.
-
+- Store only a salted adaptive password hash in users.password_hash. Use the maintained Python argon2-cffi Argon2id implementation with 19 MiB memory, 2 iterations, and parallelism 1. Benchmark authentication latency in the implementation environment and increase the cost when practical; do not lower these values silently.
+- Keep self-describing scheme/parameter metadata in the encoded hash. On successful login, rehash when the stored scheme or parameters are below the approved settings. Use the library's constant-time verification function.
+- Normalize passwords to Unicode NFC before validation, hashing, and verification. Require 15-128 Unicode code points; allow Unicode and spaces. Reject overlength input without truncation. Reject passwords on a maintained local common/compromised-password blocklist. Do not impose composition rules or periodic expiry.
+- Apply this policy to the first Admin, Admin-created temporary passwords, and Admin resets. The first Admin chooses the password at secure setup. Admin-created users and reset users receive temporary passwords and must change them before normal use.
+- Initial and temporary passwords are write-only over TLS, cleared from UI state after submission, hashed server-side, never returned or logged. Never store a clear-text or reversible password or include password values/hashes in audit snapshots.
 ## 4. Server-side sessions, cookies, CSRF, and CORS
 
 ### 4.1 Server-side sessions
 
-- Generate an opaque, unpredictable session bearer token and validate it against a server-side session record. Persist only a one-way hash of the token in `sessions.token_hash`; never persist the browser bearer token.
-- The session record is linked to one user and includes creation, expiry, optional last-seen, and revocation timestamps. Reject missing, expired, revoked, or inactive-user sessions.
-- Logout revokes the server-side session and expires its cookie. Deactivation revokes that user's active sessions together with the deactivation operation. An expired/revoked session returns the user to login; the client must not automatically replay a prior mutation after re-authentication.
-- Do not treat the session cookie as proof of role or permission. Load the current account status and role at the backend authorization boundary.
-- Session duration, idle versus absolute expiry, renewal, token rotation, concurrent-session policy, cleanup cadence, and session revocation on password recovery/change require decisions before implementation. No numeric duration is approved here.
+- Generate an opaque cryptographically random session bearer and validate it against a server-side record. Persist only a one-way hash in sessions.token_hash.
+- A session has a 30-minute idle limit and an 8-hour absolute limit from creation. Update last_seen_at from authenticated activity and reject a session when idle time or absolute expiry is reached. Cookie expiry must not exceed the earlier remaining limit.
+- Concurrent sessions are allowed. Rotate the session bearer and session-bound CSRF token on successful login and after password reset/change. Logout revokes the current server session; account deactivation and password reset/change revoke all sessions for the account. A successful password change then establishes one fresh session and CSRF value for the user.
+- Load current account status and role on each protected request. Reject missing, expired, revoked, inactive-account, or must_change_password sessions as appropriate. A user whose must_change_password is true may only read the current session, log out, or complete password change; block all other application routes server-side.
+- Deactivation and its active-session revocations are atomic. A revoked/expired session returns the user to login; never automatically replay a prior mutation.
 
 ### 4.2 Cookie requirements
 
-- Session cookies must be `Secure` and `HttpOnly`, as required by SEC-01. The API baseline names the cookie `productpulse_session`; this name is subject to the API/security review noted in that contract.
-- Select and document `SameSite`, `Path`, `Domain`, lifetime/expiry attributes, and any deployment-specific cookie scope before implementation. Do not broaden cookie scope to unrelated hosts.
-- Serve the deployed application and API over TLS. Do not use an insecure cookie configuration as a local or deployment shortcut without an explicitly scoped development configuration that cannot be used in the non-production deployment.
+- Name the host-only session cookie __Host-productpulse_session. Set Secure, HttpOnly, SameSite=Lax, Path=/, and no Domain. The __Host- prefix requires Secure, Path=/, and no Domain.
+- Refresh cookie expiry from the server only as permitted by the current idle limit, and never later than absolute expiry. Clear it on logout with matching scope and attributes.
+- Serve the deployed application/API over TLS. Do not use an insecure cookie configuration for the non-production deployment.
 
 ### 4.3 CSRF protection
 
-- Require the session-bound CSRF value on every state-changing cookie-authenticated request, including logout, user/configuration changes, upload preview/confirmation, incident actions, and notification preview/confirmation. A read-only `GET` must not perform a state change.
-- The API baseline names `X-CSRF-Token` and returns a session-bound value from login/session endpoints. Treat the header name as an API contract candidate pending its stated security review. A missing or invalid token must prevent the action and its side effects.
-- Do not rely on `SameSite` alone as CSRF protection. Define token creation, storage, rotation, comparison, login/bootstrap handling, and any Origin/Referer or Fetch Metadata checks before implementation.
-- Manual notification preview tokens are separate from CSRF tokens. Preview-token binding, expiry, replay handling, and storage are governed by the open dependency in §11 and §16.
-
-**Contract gap:** `POST /auth/login` references `X-CSRF-Token`, while login is unauthenticated and the API does not define how a browser obtains a pre-authentication token. Resolve the bootstrap design and align the API contract before implementing login.
+- At browser bootstrap, unauthenticated GET /auth/csrf creates a cryptographically random pre-login CSRF value, sets a host-only __Host-productpulse_prelogin_csrf cookie with Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, and Max-Age=600, and returns the matching value in JSON. The UI keeps that value in memory only.
+- POST /auth/login requires X-CSRF-Token to match both the returned pre-login value and the HttpOnly cookie. It also requires an exact same-origin Origin; use Referer only when Origin is absent, and reject when neither provides a valid same-origin value. Clear the pre-login cookie after successful login.
+- Bind a fresh session CSRF value to the authenticated session and return it from login/session responses. Require the matching X-CSRF-Token on every cookie-authenticated state-changing request, including logout. Rotate it with the session at login and after reset/change. A missing or invalid value blocks the action and all side effects.
+- Do not rely on SameSite alone. A read-only GET never changes state. Manual notification preview tokens remain separate and are governed by §16.
 
 ### 4.4 CORS
 
-The API contract describes a same-origin API, while the frontend's static delivery host is unselected. Keep the deployed arrangement same-origin where possible. Do not add permissive cross-origin access as a convenience default.
-
-If a deployment requires cross-origin browser requests, define the exact trusted origin allowlist after the frontend host is selected. Credentialed requests may be allowed only for explicitly listed origins; do not use `Access-Control-Allow-Origin: *` with credentials, reflect arbitrary request origins, or expose broad methods/headers. Document the required methods and headers, including the session cookie and CSRF header, and reject unlisted origins. The origin list and whether cross-origin access is needed remain open decisions.
-
+Production browser deployment is same-origin. Do not enable cross-origin credentialed browser requests or permissive CORS headers. Cross-origin browser access requires a separate deployment/product decision; wildcard origins, arbitrary-origin reflection, and credentialed wildcard CORS are forbidden.
 ## 5. Roles and authorization
 
 Authorization is enforced on the backend for every protected operation and relevant resource. UI navigation and hidden controls are usability only. The application has one retailer and no tenant, product, or supplier scopes. Do not add a Viewer role or granular permission system in the MVP.
@@ -99,19 +93,16 @@ For a denied Business User ingestion request, reject before storing file bytes, 
 
 ## 6. Initial Admin and user account lifecycle
 
-- Provision the first Admin only through a protected setup command. There is no public bootstrap endpoint. Restrict command execution to the deployment operator's authorized server-side context and keep any supplied credential out of process listings, shell history, logs, and command output. The precise one-time guard and secure input method must be decided before implementation.
-- Admins create `ADMIN` or `BUSINESS_USER` accounts through the authenticated API. Validate the role against those two values. No public self-registration, Viewer, delete, or reactivation operation is in scope.
-- Return only the public user representation. Never return password hashes, passwords, reset tokens, session tokens, or CSRF secrets in user records.
-- Deactivate rather than delete accounts. Deactivation and revocation of active sessions occur together. Preserve account and audit history under the approved capstone retention expectation.
-- The API/UI baselines accept a write-only initial password. They do not define how an Admin securely delivers it, whether a first-login password change is required, or how an account is recovered. Decide the onboarding procedure before provisioning is implemented.
-- Email canonicalization and case-insensitive uniqueness are open. Do not silently normalize account identifiers until the rule is selected and aligned with the `email_normalized` unique-index target in the Data Model.
-
+- Provision the first Admin only with a protected one-time setup command. It fails closed if any Admin already exists. Read the password through a secure hidden prompt; never accept it via argv, environment variables, shell history, command output, or logs. There is no public bootstrap endpoint.
+- Admins may create only ADMIN and BUSINESS_USER accounts. No public self-registration, SSO, Viewer role, deletion, or reactivation exists. Admin-created accounts receive a compliant temporary password and must change it before normal use.
+- Normalize email for identity by trimming outer ASCII whitespace, applying Unicode NFC, converting the domain to lowercase IDNA ASCII, then case-folding the full resulting address for email_normalized. Preserve the trimmed entered address and its casing for display. Do not rewrite plus/dot aliases or apply provider-specific alias rules. Login uses the same canonicalization; a normalized duplicate is rejected.
+- Return only the public user representation. Never return password hashes, passwords, reset values, session tokens, or CSRF secrets.
+- Deactivate rather than delete accounts. Deactivation and revocation of all active sessions occur together. Accounts cannot be reactivated under this contract.
 ## 7. Password reset, account recovery, and session expiry
 
-The current UI/API baseline defines no reset or account-recovery flow. Do not add a reset endpoint or UI control until a recovery approach is approved. Before implementation, decide whether recovery is Admin-assisted, user-initiated, or out of scope for the MVP; identify a permitted delivery/verification channel; and specify token secrecy, storage, expiry, single use, replay resistance, account-enumeration behavior, rate limiting, audit events, and effects on existing sessions. Real email recovery cannot be assumed because real sending is not approved for the MVP.
+Recovery is Admin-assisted only. An authorized Admin sets a compliant temporary password through the Admin API; the target account is marked must_change_password, and all existing sessions are revoked. The Admin hands the temporary credential directly to the verified user in person outside ProductPulse. ProductPulse does not email reset credentials or provide a public self-service reset flow.
 
-Session expiry and logout invalidation are approved requirements; exact absolute/idle lifetimes, renewal behavior, revocation timing, and cleanup are not. After a recovery or password change, the session-revocation policy must be explicit. Until those details are decided, recovery and dependent session behavior are not implementation-ready.
-
+After login with a temporary credential, restrict the account to session inspection, logout, and password change. The password-change operation validates the current temporary password and new password policy, stores a new Argon2id hash, clears must_change_password, revokes all prior sessions, and establishes a fresh session with rotated session/CSRF values. Audit reset/change events without storing the credential. This boundary avoids a recovery token and an unapproved email channel, at the cost of requiring Admin availability and verified in-person handoff.
 ## 8. OpenAI and other secrets
 
 - OpenAI and mail-provider calls execute only on the backend through provider adapters. The browser never receives provider credentials, provider request payloads, or a direct provider capability.
@@ -124,14 +115,17 @@ Session expiry and logout invalidation are approved requirements; exact absolute
 
 ### 9.1 Authorization and validation
 
-- Only Admins may upload, preview, map, confirm, inspect reports/jobs, or retry ingestion. Enforce this before persisting bytes or creating upload/preview/job state.
-- Apply the PRD's maximum of 20 MB and 50,000 rows. The exact byte interpretation of 20 MB is open; do not guess between decimal MB and MiB. Enforce the selected byte ceiling while receiving the upload, before parsing or publication.
-- Accept only supported CSV upload kinds and parse file contents as data. Do not trust the client filename or declared content type. Reject unsupported extensions, malformed CSV, unsupported encoding, and structurally invalid files. The API's UTF-8 choice and BOM behavior remain under review.
-- Validate required fields, non-empty feedback/reason, timestamps, IDs, and upload-kind constraints on the backend. Enforce approved column-mapping rules, bind mapping/header indices and text to the immutable preview, and require a new preview when bytes or mappings change.
-- Keep preview confirmation bound to the immutable preview ID and verified hash of the exact staged bytes. Validate the hash again at confirmation. Preserve original source text and event time; identical re-uploads are no-ops and changed payloads are conflicts, never silent overwrites.
-- Do not silently normalize source IDs or accept offset-free timestamps until their parsing/normalization rules are approved. Maximum CSV field/feedback length and model-context preflight are not defined; select them with the parser/model contract without silently truncating source text.
-- Escape formula-leading values in any generated/exported CSV. Rejection reports contain safe row-level reasons and must not include secrets or unnecessary raw feedback.
-
+- Only Admins may upload, preview, map, confirm, inspect reports/jobs, or retry ingestion. Enforce authorization before persisting bytes or creating upload/preview/job state.
+- Enforce an inclusive file-part ceiling of 20,000,000 bytes while streaming, before parsing/publication. Permit no more than 50,000 logical CSV data records after the header; blank records count. Return 413 when the file part exceeds its byte ceiling and 422 when the logical data-row cap is exceeded.
+- Accept strict UTF-8 only. Strip one UTF-8 BOM only at byte offset zero. Reject malformed UTF-8, alternate encodings, malformed CSV/file structure, and unsupported upload kinds. Use the RFC-4180-style parser contract and the version identifiers reviews-v1, returns-v1, product-reference-v1, supplier-reference-v1, and batch-reference-v1. Increment the relevant identifier when parser, validation, or normalization semantics change.
+- Accept timestamps only as RFC 3339/ISO-8601 with Z or an explicit offset and at most three fractional-second digits. Normalize to UTC at fixed millisecond precision. Reject offset-free timestamps and excess fractional precision; do not guess or round.
+- Enforce decoded value limits without truncation: feedback text 16,384 Unicode code points; identifiers 256 code points; all other mapped text 1,024 code points; and every decoded field at most 65,536 UTF-8 bytes. Reject empty, whitespace-only, or leading/trailing-whitespace identifiers. Preserve all other accepted source identifier/text code points without trim, case-fold, or Unicode normalization. Compare identifiers exactly and case-sensitively.
+- Admin mapping remains by source-column index and exact header; every required target maps exactly once, no canonical target is duplicated, and only optional source columns may map to IGNORE. The server validates the mapping against the staged bytes.
+- Bind every preview immutably to exact staged-byte SHA-256, parser-contract version, canonical mapping snapshot, and row outcomes/counts. A repeated Idempotency-Key with the same canonical request returns its original preview; a changed request under the same key returns 409; a new key creates a new preview. Confirmation re-reads and rehashes the staged bytes. Any file or mapping change needs a new preview.
+- Identical stored or first-valid-in-file source identity/payload is a no-op. Within one file, the first valid row is the candidate; subsequent same-payload rows are duplicate no-ops and differing rows are conflicts. A differing stored source payload creates an Admin-visible conflict and never overwrites source text or event time.
+- For reference conflicts, KEEP_EXISTING marks reviewed with no data change; DISMISS records dismissal with no data change; APPLY_INCOMING_REFERENCE applies only validated incoming fields if the expected existing-value hash still matches. Apply atomically and audit before/after values with source-row provenance; return 409 on stale expected state. Source-payload conflicts cannot apply incoming source text.
+- A preview is READY only when it has at least one eligible new row; it may also contain rejected/conflicting rows. It is INVALID when none are eligible. Malformed file-level input creates no preview and returns 422. Generate a rejection report only when rejected/conflicting rows exist; include rejected/conflicting rows, not DUPLICATE_NOOP rows, while retaining all outcome counts in the preview. Reports are UTF-8 CSV, formula-safe, and contain row number, outcome, parsed source type/identity when available, stable reason code, and safe explanation; exclude raw feedback.
+- Preserve DAI-01 mapping precedence, DAI-02 no-overwrite, DAI-08 Admin mapping, PRD partial acceptance, and the approved protected-artifact requirements. Artifact expiry/retention remains open under OPS-03.
 ### 9.2 Storage and path security
 
 - Store uploaded CSV and generated rejection-report bytes in a protected persistent local directory accessible to the API and one worker. Keep it outside public/static delivery and Git. SQLite stores opaque artifact IDs and metadata, not file bytes.
@@ -167,47 +161,44 @@ The Alert Specification v0.2 is still Draft. Its preview token actor/session/inc
 
 ## 12. Audit logging, privacy, and sensitive data
 
-- Keep append-only audit history for account, configuration, ingestion, reconciliation, and other administrative actions not already represented in incident history or notification attempts. Record actor, action, resource, outcome, request/correlation ID, timestamp, and idempotency identity where applicable.
-- Keep audit before/after snapshots to the approved safe-field allowlist. Never include raw feedback, email addresses, password hashes, passwords, session IDs/tokens, CSRF values, API keys, arbitrary message subject/body, provider payloads, filesystem paths, or raw exceptions in generic audit snapshots.
-- Preserve incident actions in append-only incident history. Preserve confirmed notification content only in its protected notification record, not generic audit/log records. Follow the API/Data Model contracts for the separate governed source and notification records.
-- Logs and traces use safe error codes and opaque IDs. Do not record request bodies wholesale, credentials, raw uploaded rows, prompts, or feedback excerpts. Redact sensitive fields before telemetry is emitted.
-- Decide which authentication and authorization events (for example, successful/failed sign-in, denied Admin operation, logout, and session revocation) belong in append-only audit history versus restricted operational security logs. No security-event taxonomy or dedicated event contract is currently approved; preserve generic login responses and never log submitted credentials or tokens.
-- The approved capstone expectation is to retain synthetic operational history and audit evidence through the capstone period. This is not a production retention policy. Exact artifact expiry, backup cadence/retention, and deletion effects remain open under OPS-03.
-
+- Keep append-only audit history for successful sign-in, logout/session revocation, account creation/deactivation/password reset/password change, authorization denials, configuration, ingestion, reconciliation, and other administrative actions not already represented by incident history or delivery attempts. Record actor when known, action, resource class/opaque resource ID where safe, outcome, request/correlation ID, and UTC timestamp.
+- Log failed sign-in and login-throttle detail only in a restricted redacted security log, separate from generic application diagnostics. Neither log may include submitted email, source IP, password, session ID/token, CSRF/recovery token, raw request body, provider secret, or raw exception. Failed login audit events do not identify the attempted email/account.
+- Generic audit snapshots remain allow-listed and omit raw feedback, names/emails, password values/hashes, session identifiers/tokens, CSRF values, API keys, arbitrary message content, provider payloads, filesystem paths, and raw exceptions.
+- Preserve incident actions in append-only incident history. Preserve confirmed notification content only in its protected notification record. Logs and traces use stable safe error codes, opaque IDs, and counts; redact sensitive fields before telemetry.
+- The capstone expectation retains synthetic operational/audit history through the capstone period; this is not a production retention policy. Artifact expiry, backup cadence/retention, and deletion effects remain open under OPS-03.
 ## 13. API validation, rate limiting, and error handling
 
-- Validate every request on the server, including authentication state, role, resource state, request shape, allowed values, length bounds, pagination/filter bounds, and idempotency behavior. Frontend validation is advisory only.
-- Use parameterized SQL. Do not interpolate request values into SQL, shell commands, filesystem paths, logs, prompts, or HTML. Escape untrusted text in UI rendering and CSV exports.
-- Enforce authorization on every protected endpoint and re-check state-sensitive permissions at mutation time. For notification confirmation, re-check recipient authorization and preview binding rather than trusting an earlier preview. For retries, re-check server-derived eligibility at submission.
-- Rate limits are required for authentication and other abuse/cost-sensitive endpoints, but exact scopes, thresholds, windows, and retry behavior are open. Select them before dependent implementation. The API baseline supports `429` and `Retry-After`; clients must not enter retry loops.
-- Follow the API problem contract: `401` for missing/expired/invalid authentication; `403` for denied role/action; `404` for unavailable resources where that avoids disclosure; `409` for stale state, hash, or idempotency conflicts; `413` for upload size; `415` for unsupported input; `422` for invalid requests; `429` for rate limiting; and generic redacted `5xx`/`503` responses for internal or provider failures.
-- Error responses must not reveal account existence, secrets, local paths, raw SQL/provider errors, prompt/feedback text, or stack traces. Return stable safe codes and a request ID when available; retain restricted internal diagnostics without sensitive payloads.
-- API version prefix, detailed CORS policy, and numeric rate limits remain unresolved. Do not treat current OpenAPI response shapes as approval of those omitted policies.
-
+- Validate every request server-side: authentication state, role, current resource state, request shape, allowed values, length bounds, pagination/filter bounds, and idempotency behavior. Frontend checks are advisory.
+- Apply login throttling only to login: 10 failed attempts for a normalized candidate account in a rolling 15-minute window triggers a 15-minute cooldown; cap all login attempts per source IP at 60 in a rolling 15-minute window. Return generic credential failures, and generic 429 responses with Retry-After. Do not reveal whether an account exists or is inactive. These values do not set limits for upload, mutation, provider, or other routes.
+- Other abuse/cost-sensitive route limits, retry budgets, and backoff remain assigned to OPS-02 and AI_SPEC. Do not invent defaults for them. The API problem contract uses 429 and Retry-After without retry loops.
+- Use parameterized SQL. Do not interpolate request values into SQL, shell commands, filesystem paths, logs, prompts, or HTML. Escape untrusted text in UI rendering and formula-escape user-controlled CSV export/report cells.
+- Enforce role and state-sensitive authorization on every protected endpoint and recheck it at mutation time. For forced-password-change sessions, permit only session inspection, logout, and password change.
+- Follow the API problem contract: 401 for missing/expired/invalid authentication; 403 for denied role/action; 404 when needed to avoid disclosure; 409 for stale state/hash/idempotency conflicts; 413 for file-size excess; 415 for unsupported input; 422 for invalid requests/row cap; 429 for rate limiting; and generic redacted 5xx/503 responses for internal/provider failures. Errors never disclose account existence, secrets, local paths, raw SQL/provider errors, feedback, or stack traces.
+- Production browser/API deployment is same-origin; cross-origin browser requests are not enabled. The API returns stable safe codes and a request ID where available.
 ## 14. Security testing and acceptance criteria
 
 These are specification-level acceptance criteria for future implementation verification. They do not select a test framework or authorize application code/tests in this change.
 
 | ID | Acceptance criterion |
 |---|---|
-| SEC-AC01 | Passwords are stored only as secure salted adaptive hashes; no API, log, audit, or UI response exposes a password or hash. The selected algorithm and parameters are recorded before implementation. |
-| SEC-AC02 | Login establishes only a server-side session for an active account; the browser receives a `Secure`, `HttpOnly` cookie and never stores the bearer token in web storage. Expiry, logout, and account deactivation invalidate sessions according to the approved session policy. |
-| SEC-AC03 | Missing or invalid CSRF protection blocks every cookie-authenticated state-changing request without side effects. Login bootstrap, token issuance/rotation, cookie policy, and CORS behavior match the approved security decision. |
+| SEC-AC01 | Passwords use Argon2id with the approved parameters, NFC policy, 15-128 code-point bounds, and blocklist; no password/hash is exposed. Rehash on successful login when required. |
+| SEC-AC02 | Active accounts receive server-side sessions with 30-minute idle and 8-hour absolute expiry; cookie attributes and reset/change/deactivation revocation match §4. |
+| SEC-AC03 | GET /auth/csrf, pre-login cookie/header/origin validation, session CSRF rotation, same-origin CORS, and forced-change route restriction match the approved contract; invalid CSRF has no side effects. |
 | SEC-AC04 | Direct requests by a Business User to each Admin-only route return `403`; an upload denial stores no bytes and creates no upload preview or job. Admin-only user/configuration/processing permissions are enforced even when UI controls are bypassed. |
-| SEC-AC05 | Public self-registration and SSO are unavailable. The first Admin is created only through the protected setup command. User deactivation and session revocation are atomic from the application's perspective. |
+| SEC-AC05 | Public signup/SSO are unavailable; one-time Admin setup is protected; account normalization, temporary-password change, direct handoff, deactivation, and session revocation match the approved contract. |
 | SEC-AC06 | OpenAI and mail credentials are absent from browser bundles, repository content, prompts, logs, generic audit snapshots, responses, and errors. |
-| SEC-AC07 | Upload tests cover authorized and unauthorized actors, exact configured byte and row limits, malformed/unsupported inputs, mapping/hash changes, duplicate/conflicting identities, and path-escape attempts. Artifact access is through an authorized backend route; a mismatched hash or unresolved ID fails closed. |
+| SEC-AC07 | Upload checks enforce 20,000,000 bytes, 50,000 logical rows, UTF-8/BOM, parser versions, timestamp/field/ID rules, mapping/hash integrity, duplicates/conflicts, and safe report behavior. |
 | SEC-AC08 | Adversarial feedback that requests secrets, instruction override, taxonomy override, output-shape override, or tool use is treated only as classification data or uncertainty. No tool or side effect is executed; output validation remains server-side. |
 | SEC-AC09 | A manual email preview creates no outbox row/send. Confirmation rejects unauthorized or inactive recipients, changed preview content, invalid CSRF, or mismatched idempotency use. A replay of the same confirmation does not duplicate the event. No supplier or unapproved real address is contacted. |
-| SEC-AC10 | Audit/log review finds no raw feedback, passwords, hashes, session/CSRF/reset tokens, provider secrets/payloads, arbitrary message content, email addresses in generic snapshots, filesystem paths, or raw exception details. |
-| SEC-AC11 | Invalid requests return safe, stable problem responses and request IDs where specified; no error leaks secrets, account existence, or internal stack details. Rate-limited requests receive `429` and the approved retry guidance. |
+| SEC-AC10 | Audit/log review finds no raw feedback, passwords/hashes, email, source IP, session/CSRF/reset tokens, provider secrets/payloads, arbitrary message content, filesystem paths, or raw exceptions. Required auth/security events are present in their approved channels. |
+| SEC-AC11 | Invalid requests return safe stable problem responses; login throttling uses the approved account/IP windows and generic 429 with Retry-After. Other route limits remain governed separately. |
 | SEC-AC12 | The non-production deployment uses TLS, protected server-side secrets, least-privilege SQLite/artifact storage, one active API/worker instance with shared persistent local storage, synthetic/permitted non-sensitive data, health checks, backup/restore verification, and a demonstrated rollback. |
 | SEC-AC13 | SQL-injection test inputs supplied through query parameters, request bodies, filters, and uploaded-file fields do not alter query structure, bypass authorization, or expose or modify data outside the caller's permissions. Database access uses parameterized queries; responses and logs do not disclose raw SQL or database errors. |
 | SEC-AC14 | Stored and reflected user-controlled content, including feedback, CSV headers and values, and rejection-report content, is rendered as inert text. Test markup and script payloads do not execute in the browser or create active HTML in any UI surface. |
 | SEC-AC15 | CSV export tests include formula-leading values in feedback, headers, and other user-controlled fields. Exported values are safely escaped so spreadsheet software does not evaluate them as formulas, while source data remains unchanged. |
-| SEC-AC16 | When cross-origin requests are configured, a request from an origin outside the approved exact-origin allowlist receives no permissive `Access-Control-Allow-Origin` or credential-sharing response. The server does not use wildcard credentialed CORS or reflect arbitrary origins; backend authentication and authorization remain enforced independently of CORS. |
+| SEC-AC16 | Production browser/API deployment is same-origin and does not allow cross-origin credentials. Any future cross-origin arrangement is separately approved and exact-origin constrained. |
 
-Before a security decision is finalized, verify that test cases use the approved values and do not silently convert an open item into a test default. Backend/API and frontend test runners, repeatable local PowerShell scripts, and the documented pre-merge checklist are selected in TECH_STACK.md under ARC-06 and PRD change RC-01. Security checks remain automated and required; retain their results with the exact-revision checklist evidence.
+Security acceptance checks must use the approved values and retain exact-revision local checklist evidence; selected pytest/FastAPI TestClient, Vitest/React Testing Library, PowerShell, and security-check tooling is recorded in TECH_STACK.md.
 
 ## 15. Non-production deployment security
 
@@ -220,38 +211,24 @@ Before a security decision is finalized, verify that test cases use the approved
 
 ## 16. Unresolved decisions and implementation dependencies
 
-The following remain unresolved and unapproved by this document. Resolve each before implementation that depends on it; preserve current conditional baselines and activation gates.
+The following implementation decisions remain open. They do not reopen the approved SEC-01/02 or DAI-01/02/08 contracts.
 
 | Decision / reference | Still needed | Blocks or constrains |
 |---|---|---|
-| Password scheme and policy — SEC-01, API `CreateUserRequest` | Hash algorithm/library and parameters; password strength and length policy; initial-password delivery and first-login change behavior; hash upgrade policy. | Password creation, login, and user provisioning. |
-| Account identity — DATA_MODEL §4.1 | Email canonicalization, case-insensitive uniqueness, and normalization behavior. | Login lookup and the `email_normalized` unique key. |
-| Initial Admin setup — SEC-01 | Secure CLI input method, authorization boundary, and repeat/first-Admin guard. | Bootstrap implementation. |
-| Sessions and cookies — SEC-01, API security scheme | Absolute/idle expiry, renewal/rotation, concurrent sessions, cleanup, revocation on recovery/password change, cookie attributes beyond `Secure`/`HttpOnly`, and approval of proposed name `productpulse_session`. | Authentication/session implementation and deployed cookie behavior. |
-| CSRF bootstrap and token lifecycle — API `CsrfTokenHeader` | How an unauthenticated browser obtains login protection; token creation, rotation, header name review, and Origin/Referer/Fetch Metadata checks. | Login and every cookie-authenticated mutation. |
-| CORS and frontend host — API/Architecture/Tech Stack | Whether cross-origin access is needed; exact origin allowlist, credential handling, methods, and headers after hosting is selected. | Browser/API deployment configuration. |
-| Password recovery — SEC-01, UI §4.1 | Whether recovery is Admin-assisted, self-service, or excluded; permitted delivery channel; anti-enumeration, token lifecycle, audit, throttling, and session revocation. | Any reset/recovery flow. Existing UI/API does not define one. |
-| Rate limits — API, OPS-02, AI_SPEC §18 | Numeric policies for login, sensitive mutation, upload, provider/cost-sensitive routes, and other public/abuse-sensitive surfaces. | Endpoint implementation and `429` behavior. |
-| Security-event audit scope — DATA_MODEL §4.7, API audit contract | Events to record for sign-in outcomes, denied actions, logout/session revocation, storage/access scope, and retention alignment. | Authentication/audit implementation; do not add sensitive fields to the approved audit snapshot allowlist. |
-| Upload parser contract — API `x-csv-input-contract`, PRD §7 | Exact 20 MB bytes, BOM/encoding behavior, parser version naming, timezone-offset handling, source-ID normalization, and maximum field/feedback length. | Upload parser and model input preflight. Do not truncate source text silently. |
-| Artifact lifecycle — OPS-03/OPS-06 | Preview, upload, rejection-report expiry/retention, cleanup ordering, deletion audit effects, backup cadence/retention/mechanism. | Artifact cleanup and operational recovery. |
-| Manual preview token — API, UI §4.7, ALERT_SPEC §5 | Storage, entropy/verification, expiry, replay, repeat-preview behavior, and actor/session binding implementation details. | Manual notification preview and confirmation. |
-| Recipient directory and email sink — SEC-03, PRD §19.1, ARC-05 | Formal final sandbox directory/fallback approval, routing semantics, concrete capture sink/provider, provider credential/verification behavior. | Manual/automatic notification configuration and any delivery. No real email. |
-| Deployment host and secrets — OPS-01 | Provider selection and proof of single-instance persistent-local-storage fit; secret storage, TLS, CORS origin, file permissions, health, backup, and rollback setup. | Non-production deployment approval. |
+| Other-route rate limits — OPS-02 / AI_SPEC | Numeric policies for upload, sensitive mutations, provider/cost-sensitive routes, and other abuse-sensitive surfaces. Login limits are fixed in §13. | Dependent endpoint implementation and 429 behavior; do not infer the login values apply elsewhere. |
+| Artifact lifecycle — OPS-03/OPS-06 | Preview, upload, and rejection-report expiry/retention, cleanup ordering, deletion audit effects, and backup cadence/retention/mechanism. | Artifact cleanup and operational recovery. |
+| Manual preview token — API, UI §4.7, ALERT_SPEC §5 | Storage, entropy/verification, expiry, replay, repeat-preview behavior, and actor/session binding. | Manual notification preview and confirmation. |
+| Recipient directory and email sink — SEC-03, ARC-05 | Final sandbox directory/fallback, routing semantics, concrete capture sink/provider, provider verification, and external idempotency behavior. | Manual/automatic notification configuration and delivery. No real email. |
+| Deployment host and secrets — OPS-01 | Provider selection and proof of single-instance persistent-local-storage fit; secret store, TLS, file permissions, health, backup, and rollback setup. | Non-production deployment approval. |
 | Retention and data scope — PRD §13, OPS-03, AI_SPEC §14 | Artifact/audit operational retention details; any future non-synthetic data requires separate privacy/provider-control approval. | Retention automation or data-scope expansion. |
-| Test and local verification tools — TECH_STACK §93 | Backend/API pytest with FastAPI TestClient, frontend Vitest with React Testing Library, and repeatable local PowerShell check scripts with documented pre-merge evidence are approved. GitHub Actions and hosted CI merge gates are excluded. | Implement checks with the relevant tickets; retain security acceptance criteria and exact-revision evidence. Criteria in §14 remain tool-neutral. |
 
-### Cross-document gaps to resolve
+### Cross-document gaps and preserved gates
 
-1. The login operation references a CSRF header but does not define pre-authentication token acquisition. This must be aligned with API_SPEC.yaml before implementation.
-2. The API describes a same-origin server but the static frontend host is not selected. CORS must be reviewed against the chosen deployment topology.
-3. The API/Data Model/UI point session and recovery policy here but intentionally leave exact values open. This document enumerates the choices; it does not approve them.
-4. The API carries a draft 20 MB limit, UTF-8/BOM and timestamp parsing notes, and a named session cookie/header; those details remain explicitly subject to review. Preserve the open status until approved.
-5. ALERT_SPEC.md v0.2 is Draft. Its preview-token and notification controls do not authorize activation. Final recipient/fallback/sink decisions and the PRD's directory sign-off remain outstanding.
-6. Detection remains gated by PB-01 threshold calibration, DAI-06 coverage parameters, and authoritative completed-classification attempt selection. Nothing in this document enables detection or automatic email.
-7. Exact rate limits, artifact retention, backup cadence/retention/mechanism, deployment provider, and test tooling are not defined in the approved baselines.
-8. The current audit contract covers administrative actions and safe snapshots but does not define a security-event taxonomy for authentication successes/failures or denied requests.
-
+1. GET /auth/csrf now provides the pre-login token and cookie; login validates the token and same-origin Origin/Referer contract. API_SPEC.yaml and UI_SPEC.md must use that flow.
+2. Production is same-origin by design. A future cross-origin deployment requires a separate review and an exact origin policy before configuration.
+3. Manual notification preview token storage/lifecycle, final recipient/routing/sink decisions, and any real email remain unapproved.
+4. Detection stays disabled until PB-01 thresholds, DAI-06 coverage parameters, and required evaluation/classification-authority gates are approved. This security update does not activate detection or notifications.
+5. Numeric rate limits outside login, and OPS-03 artifact retention/backup parameters, remain open. Do not substitute approved login values for those policies.
 ## 17. Source consistency and change control
 
 This document is subordinate to the PRD for product behavior and to the Decision Register for approval status. Where a detail in this document conflicts with an approved decision, stop and reconcile the specifications; do not infer that this security baseline supersedes them. In particular:

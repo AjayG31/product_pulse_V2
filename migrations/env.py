@@ -2,11 +2,12 @@ from alembic import context
 from sqlalchemy.engine import Connection
 
 from productpulse.database import create_database_engine
+from productpulse.models import Base
 from productpulse.settings import get_settings
 
 
 config = context.config
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

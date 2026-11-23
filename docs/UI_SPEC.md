@@ -1,10 +1,10 @@
 # ProductPulse UI/UX Specification
 
-**Version:** 0.3  
+**Version:** 0.4.1  
 **Status:** Approved — Design Baseline  
-**Approval date:** 21 November 2026  
-**Requirements source:** PRD v1.6  
-**Related specifications:** Architecture v1.3 (Approved); AI_SPEC v1.0 (Approved — Design Baseline); Tech Stack v0.7; Detection Specification v1.1 (Draft clarification; v1.0 remains the Approved Design Baseline); Alert Specification v0.2 (Draft); API_SPEC.yaml v1.4.0 (Approved — Design Baseline; v1.1.0 was the previous approved version); Data Model v1.4 (Approved — Design Baseline; v1.1 was the previous approved version); Decision Register v1.4.
+**Approval date:** 22 November 2026  
+**Requirements source:** PRD v1.7  
+**Related specifications:** Architecture v1.5 (Approved); AI_SPEC v1.0 (Approved — Design Baseline); Tech Stack v1.2.0; Detection Specification v1.1 (Draft clarification; v1.0 remains the Approved Design Baseline); Alert Specification v0.3 (Draft); API_SPEC.yaml v1.5.2 (Approved — Design Baseline, conditional); Data Model v1.5.2 (Approved — Design Baseline, conditional); Security v1.1; Decision Register v2.0.
 
 ## 1. Purpose and approval boundary
 
@@ -12,7 +12,7 @@ This specification defines the React + TypeScript presentation layer for the Pro
 
 The API is the authorization and validation boundary. UI visibility and client validation improve usability but do not grant access. The browser does not call OpenAI or an email provider, run detection formulas, decide alert eligibility, or hold provider credentials.
 
-This document is approved as a conditional design baseline on 21 November 2026. It does not approve the draft Detection or Alert specifications or authorize application code. The API and Data Model conditional design baselines are reflected here; exact readiness degradation/provider-health assessment parameters remain pending for the operations specification. This approval does not activate detection, notification routes, or other functionality whose prerequisites remain unresolved. Implementation remains subject to the pending decisions documented in this specification and its related contracts.
+The original conditional design baseline was approved on 21 November 2026; this revision records the Product Owner-approved PP-003 authentication, PP-004 ingestion, and PP-007 operational decisions dated 22 November 2026. It does not approve the draft Detection or Alert specifications or authorize application code. The API and Data Model conditional design baselines are reflected here; exact readiness degradation/provider-health assessment parameters remain pending for the operations specification. This approval does not activate detection, notification routes, or other functionality whose prerequisites remain unresolved. Implementation remains subject to the pending decisions documented in this specification and its related contracts.
 
 ### 1.1 Governing display rules
 
@@ -86,13 +86,13 @@ Hiding Admin navigation is not an authorization control. A Business User who fol
 
 **Content and behavior**
 - Email and password fields, submit action, field-level validation, and a generic credential failure message that does not disclose whether the account exists.
-- No public registration, SSO, password reset, or recovery flow is defined in the MVP UI. Account recovery and exact password/session policy remain for SECURITY.md.
-- On success, retain only the public user and CSRF token returned by the API, then open Overview. Do not store a session token in browser storage.
+- No public registration, SSO, or self-service recovery. On page bootstrap, call GET /auth/csrf, retain the returned CSRF value in memory only, and submit it with POST /auth/login. Admin-assisted password reset uses a temporary credential handed directly to the verified user in person outside ProductPulse; ProductPulse sends no recovery email.
+- On success, retain only the public user and session-bound CSRF token returned by the API; do not store the session token. If must_change_password is true, route to the forced password-change screen and allow only session inspection, logout, or password change until complete. After change, use the fresh session and CSRF values returned by the API.
 - On expired or revoked session, return to Login. Do not automatically replay a previously submitted mutation after re-authentication.
 
-**API mapping:** POST /auth/login; GET /auth/session during session bootstrap; POST /auth/logout for sign-out.
+**API mapping:** GET /auth/csrf and POST /auth/login for bootstrap/sign-in; GET /auth/session during session bootstrap; POST /auth/password-change for forced change; POST /auth/logout for sign-out.
 
-**Errors:** 401 shows a generic sign-in failure; 422 shows field/request validation; 429 shows the server's retry guidance if supplied. Never display raw authentication details.
+**Errors:** 401 shows a generic sign-in failure; 422 shows field/request validation; 429 shows generic retry guidance. Never display raw authentication details or account existence.
 
 ### 4.2 Overview Dashboard
 
@@ -228,13 +228,13 @@ Use the opaque preview token and content hash returned by the server; do not inv
 - Before requesting a server preview, show an interactive source-column mapping step for every CSV type, as required by PRD §5.3. Read header names locally only to populate the mapping UI; render them as untrusted text. Admins can map source columns to required and optional canonical template fields; optional source columns may be marked IGNORE. Each required target must be mapped exactly once, and two source columns cannot map to the same target. The server validates the mapping, required targets, header/index binding, file bytes, and rows; a preview missing a required mapping cannot be confirmed.
 - Send the selected mapping with the file in POST /admin/ingestion/previews. Keep the validated mapping with the immutable preview identity and verified file hash; do not offer a mapping edit after preview. A changed file or mapping requires a new validated preview. Only Admins can access upload, preview, mapping, and confirmation controls; the backend enforces this restriction.
 - For REVIEW and RETURN imports, require an explicit processing mode: HISTORICAL_BATCH or INCREMENTAL_RESPONSES. Do not select a default silently. Reference imports do not use a processing mode.
-- Display preview state, file identity/hash summary, total rows, accepted, rejected, duplicate no-op, and conflict counts. Provide paged row outcomes with safe reasons and a downloadable rejection report when available.
+- Display preview state, file identity/hash summary, parser contract version, total rows, accepted, rejected, duplicate no-op, and conflict counts. Provide paged row outcomes and the UTF-8 formula-safe report when rejected/conflicting rows exist; the report excludes duplicate no-ops and raw feedback.
 - Explain that accepted feedback is automatically queued for classification using the selected immutable mode after the import is confirmed. No Business User action can initiate or retry ingestion.
 - Confirmation must use the exact preview and verified file hash. If the selected file changes, create a new preview. Never silently confirm a changed file.
-- Show linkage resolution state, duplicate behavior, and changed-payload conflicts from the server. Do not overwrite original feedback on conflict.
-- Follow the server's file-size and row limits. The PRD's nominal 20 MB limit exists, but its exact byte interpretation remains pending. The API design baseline specifies a 50,000-row limit; do not present client-side limits that differ from the server contract.
+- Show linkage state, exact case-sensitive source identifier behavior, duplicate no-ops, and changed-payload conflicts from the server. Timestamps require Z/explicit offsets and at most three fractional digits; the server normalizes to UTC milliseconds. Never overwrite original feedback.
+- Display the approved inclusive 20,000,000-byte (decimal 20 MB) file-part limit and 50,000 logical data-record limit after the header; blank records count. Enforce the same limits server-side while streaming/parsing. Accept strict UTF-8 with at most one initial BOM; show safe errors for unsupported/malformed input.
 
-**API mapping:** GET /admin/ingestion/templates/{upload_kind}; POST /admin/ingestion/previews with column_mappings; GET /admin/ingestion/previews/{preview_id} including the saved mapping; GET /admin/ingestion/previews/{preview_id}/rows; GET /admin/ingestion/previews/{preview_id}/rejection-report; POST /admin/ingestion/previews/{preview_id}/confirm.
+**API mapping:** GET /admin/ingestion/templates/{upload_kind}; POST /admin/ingestion/previews with column_mappings and Idempotency-Key; GET /admin/ingestion/previews/{preview_id}; GET /admin/ingestion/previews/{preview_id}/rows; GET /admin/ingestion/previews/{preview_id}/rejection-report; POST /admin/ingestion/previews/{preview_id}/confirm.
 
 ### 4.9 Ingestion Jobs and Error Reports
 
@@ -245,7 +245,7 @@ Use the opaque preview token and content hash returned by the server; do not inv
 - Job detail: counts, linked preview, report link, processing state, and relevant retry availability.
 - Paged preview outcomes/error report identify row and safe rejection/conflict reason. Do not place raw feedback text, secrets, file paths, or provider payloads in operational messages.
 - Show classification/background processing as a separate job family so users can distinguish ingestion from classification, Batch polling, detection, and reconciliation.
-- Show the API's explicit retry_eligibility and safe reason code on Admin job detail. Offer Retry only when eligible is true; the server rechecks eligibility at submission and may return 409 with the current reason. Retry preserves source identity and the original processing mode. Do not promise a numeric retry budget while OPS-02 parameters remain open.
+- Show the API's explicit retry_eligibility and safe reason code on Admin job detail. Offer Retry only when eligible is true; the server rechecks eligibility at submission and may return 409 with the current reason. Retry preserves source identity and the original processing mode. PP-014-created classification work has `max_attempts=3` total and uses the first two PP-007 delays (5 and 15 seconds); do not imply attempt budgets for other job types or notification providers.
 - Allow Admins to inspect and resolve source/mapping conflicts through the explicit reconciliation flow. Explain that a correction can trigger affected recomputation; the UI does not resolve linkage by guessing.
 - Show operation summary data for queues, failures, freshness, coverage, outbox, model/version, usage, and estimated cost where returned. Cost is report-only until an approved budget gate exists.
 
@@ -260,10 +260,10 @@ Use the opaque preview token and content hash returned by the server; do not inv
 - **Detection rules:** list versions, create drafts, show calibration/activation state, and permit activation only after PB-01 and DAI-06 parameters and classification-attempt authority are resolved and the backend accepts activation. Until then display “Pending calibration” and keep active detection unavailable.
 - **Recipient directory and groups:** list/manage approved sandbox/capture recipients, groups, and membership history. No arbitrary address entry, supplier group, or real-send setup. The final directory and routing rules remain pending.
 - **Notification routing:** list/create immutable inactive route definitions and show the fixed 86,400-second same-severity cooldown. Do not provide a cooldown override. Keep route activation disabled until routing precedence, fallback, provider, and related pending decisions are approved.
-- **Users:** list Admin and Business User accounts, provision a user with an assigned MVP role, and deactivate an account. The create form submits a masked initial_password over the authenticated TLS API request; clear it from UI state after submission. The API stores only a secure hash and returns a public User record without any password or secret. Do not display, recover, return, or log stored passwords. Deactivation revokes active sessions. Do not add public registration, Viewer role, delete/reactivate, password reset, or recovery controls absent an approved contract; keep password strength, onboarding, and account recovery decisions for SECURITY.md.
+- **Users:** list Admin and Business User accounts, provision accounts with a compliant temporary password, deactivate, and Admin-reset a password. Clear write-only password values from UI state after submission; never display or return stored passwords/hashes. The user must change an initial/reset temporary password before normal use. Deactivation/reset revoke active sessions. Admin hands temporary credentials directly to the verified user in person outside ProductPulse; do not email them. Do not add public registration, Viewer role, deletion, or reactivation.
 - **Audit and operations:** expose safe configuration/admin audit history and summarized processing status. Do not expose provider secrets, raw feedback in telemetry, or filesystem paths.
 
-**API mapping:** GET/POST /admin/taxonomies; GET /admin/taxonomies/{taxonomy_version_id}; POST /admin/taxonomies/{taxonomy_version_id}/activate; GET/POST /admin/detection-rules; POST /admin/detection-rules/{rule_version}/activate; GET/POST /admin/recipients; PATCH /admin/recipients/{recipient_id}; GET/POST /admin/recipient-groups; PATCH /admin/recipient-groups/{recipient_group_id}; GET/POST /admin/recipient-groups/{recipient_group_id}/members; DELETE /admin/recipient-groups/{recipient_group_id}/members/{recipient_id}; GET/POST /admin/notification-rules; PATCH /admin/notification-rules/{notification_rule_id}; GET/POST /admin/users; GET/PATCH /admin/users/{user_id}; GET /admin/audit-events; GET /admin/operations/summary; GET /admin/source-coverage; GET /health. GET /readiness is also available read-only to Admin and Business User and exposes only coarse readiness states.
+**API mapping:** GET/POST /admin/taxonomies; GET /admin/taxonomies/{taxonomy_version_id}; POST /admin/taxonomies/{taxonomy_version_id}/activate; GET/POST /admin/detection-rules; POST /admin/detection-rules/{rule_version}/activate; GET/POST /admin/recipients; PATCH /admin/recipients/{recipient_id}; GET/POST /admin/recipient-groups; PATCH /admin/recipient-groups/{recipient_group_id}; GET/POST /admin/recipient-groups/{recipient_group_id}/members; DELETE /admin/recipient-groups/{recipient_group_id}/members/{recipient_id}; GET/POST /admin/notification-rules; PATCH /admin/notification-rules/{notification_rule_id}; GET/POST /admin/users; GET/PATCH /admin/users/{user_id}; POST /admin/users/{user_id}/password-reset; GET /admin/audit-events; GET /admin/operations/summary; GET /admin/source-coverage; GET /health. GET /readiness is read-only for both roles.
 
 ## 5. KPI, chart, filter, and drill-down contract
 
@@ -427,9 +427,9 @@ These are conceptual UI responsibilities, not a component-library selection.
 **Acceptance criteria**
 - UI-AC20: Taxonomy candidates are not shown as active unless returned by an active approved version.
 - UI-AC21: Detection and route activation remain blocked/pending until their explicit calibration and provider/routing dependencies are approved.
-- UI-AC22: User management supports only the API's create and deactivate operations for Admin/Business User roles; no self-registration or Viewer option appears.
+- UI-AC22: User management supports Admin/Business User create, deactivate, and Admin-assisted temporary-password reset; no self-registration or Viewer option appears. Temporary passwords are handed directly to the verified user outside ProductPulse.
 - UI-AC23: Configuration and operational pages omit secrets, raw provider payloads, and filesystem paths.
-- UI-AC28: User provisioning sends only the write-only initial password field to the API; password hashes, stored passwords, and secrets never appear in responses or UI state after submission. Recovery and password-policy details remain for SECURITY.md.
+- UI-AC28: User provisioning/reset sends only a write-only policy-compliant temporary password; the UI clears it after submission, never exposes stored passwords/hashes, and indicates required first-login change.
 
 ## 11. Consistency review and pending decisions
 
@@ -439,16 +439,16 @@ The following items remain unresolved and constrain this UI:
 
 1. **Detection activation:** PB-01 thresholds/minimum counts and DAI-06 coverage scope/completeness/calibration remain pending. The selected authoritative completed classification attempt is also unresolved. DETECTION_SPEC v1.1 explicitly keeps automatic detection and automatic notifications disabled until the required policy and calibration are approved.
 2. **Metric definitions:** PB-05 leaves active warnings, critical warnings, and products at risk undefined. Render API null/PENDING_DEFINITION as pending, not as a number.
-3. **Alert behavior:** ALERT_SPEC v0.2 is Draft. Cooldown is fixed at 86,400 seconds per incident/severity across routes with escalation bypass, but timestamp anchor, same-severity re-crossing, treatment of failed/blocked sends, severity decreases, and recurrence/cooldown interaction remain pending. UI must not infer these edge rules.
+3. **Alert behavior:** ALERT_SPEC v0.3 is Draft. Cooldown is fixed at 86,400 seconds per incident/severity across routes with escalation bypass, but timestamp anchor, same-severity re-crossing, treatment of failed/blocked sends, severity decreases, and recurrence/cooldown interaction remain pending. UI must not infer these edge rules.
 4. **Routing and provider:** Final recipient directory, routing precedence/group combination, fallback, route-key semantics, concrete sandbox/local capture provider, callbacks, and provider verification are open. Automatic and manual send controls must remain gated until the required approvals/configuration.
 5. **Manual preview lifecycle:** Preview-token persistence, expiry, replay, and session binding remain open. The UI consumes only the server token/hash and requires a fresh preview after content or recipient changes.
-6. **Retry and recovery:** Numeric retry limits/backoff/error taxonomy and background reconciliation cadence remain open. The API design baseline exposes safe retry eligibility and ineligibility reason codes; dependent implementation remains gated on the unresolved retry and recovery parameters. OUTCOME_UNKNOWN is not automatically resent absent provider verification or a separately approved policy.
+6. **Retry and recovery:** PP-007 approves worker reconciliation every 60 seconds and eligible retry delays of 5/15/45 seconds. `max_attempts=3` applies only to PP-014-created classification work; other job-type budgets and provider-specific notification limits/error mapping remain under their owning decisions. The API design baseline exposes safe retry eligibility and ineligibility reason codes. `OUTCOME_UNKNOWN` is not automatically resent.
 7. **Readiness contract:** ARC-08 approves the role-visible coarse readiness endpoint and its informational-only semantics. Exact degradation thresholds and provider-health assessment parameters remain pending for the operations specification; the API must return UNKNOWN until readiness can be established. INACTIVE detection is not zero defects. The endpoint does not expose Admin configuration or authorize actions, and this approval does not activate detection or notifications.
 8. **CSV mapping contract:** PRD §5.3 explicitly requires mapping. DAI-08 approves Admin mapping to required and optional targets, uniqueness, optional-source IGNORE, confirmation blocking for missing required targets, and immutable preview/hash binding. These semantics are captured in the approved conditional API and Data Model design baselines; dependent behavior remains subject to documented implementation prerequisites.
 9. **Filter consistency:** The warning list uses the API-supported subset allowed by PRD §6.2. The UI visibly marks category_code and source_type as unapplied to incident rows and carries only compatible filters into drill-downs.
-10. **Contract approval:** API_SPEC v1.4.0 and Data Model v1.4 are approved as conditional design baselines; API v1.1.0 and Data Model v1.1 were their previous approved versions. Resolve the documented implementation dependencies before building dependent behavior.
-11. **Frontend choices:** Router, component library, state-management package, exact chart conventions, session/account recovery details, and design tokens are not selected. This spec defines behavior and reusable responsibilities without choosing those tools.
-12. **Upload boundary:** The nominal PRD 20 MB limit has an unresolved exact byte convention. Show the server's configured limit; do not silently implement a different client-only ceiling.
+10. **Contract approval:** API_SPEC v1.5.2 and Data Model v1.5.2 are approved as conditional design baselines; API v1.5.1 and Data Model v1.5.1 were their previous approved versions. Remaining implementation and unrelated decision gates still apply.
+11. **Frontend choices:** Exact chart conventions and design tokens remain open; approved authentication/recovery behavior is defined in SECURITY.md and API_SPEC.yaml.
+12. **Upload contract:** The 20,000,000-byte file-part limit, 50,000 logical-row cap, encoding, timestamp, field-length, parser-version, and report behavior are approved and shown consistently with API_SPEC.yaml. Synthetic uploads, previews, row reasons, and rejection reports remain available through the capstone period without automatic per-artifact expiry; removal occurs through documented reset/reseed after backup and reference/audit checks under OPS-03.
 13. **Performance:** Dashboard p95 and post-classification display targets are targets to validate, not guarantees. The 30-second poll is not a processing SLA.
 
 No incompatible requirement was identified for the UI workflows described here. The PRD describes automatic warning/email scope, while the current Detection clarification explicitly holds activation pending calibration; this approved design baseline preserves the gate and does not treat the broader PRD scope as evidence that the feature is active.

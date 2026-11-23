@@ -1,0 +1,50 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261122143331
+Username: COURSE5\Ajay.Gunjiker
+RunAs User: COURSE5\Ajay.Gunjiker
+Configuration Name: 
+Machine: ARLML918 (Microsoft Windows NT 10.0.26300.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Ticket PP-014 -EvidencePath docs/evidence/m2/PP-014.txt
+Process ID: 18408
+PSVersion: 5.1.26100.10068
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.10068
+BuildVersion: 10.0.26100.10068
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+uv: uv 0.13.9 (6b2d39dcc 2026-11-17 x86_64-pc-windows-msvc)
+Node.js: 26.13.0
+npm: 11.20.0
+Python: Python 3.12.16
+
+===== PP-014 pytest / FastAPI TestClient =====
+
+
+===== PP-014 Vitest / React Testing Library =====
+
+
+===== PP-014 frontend production build =====
+
+
+===== PP-014 Bandit =====
+
+
+===== PP-014 pip-audit =====
+
+
+===== PP-014 npm audit =====
+
+
+===== source snapshot identity =====
+Implementation source snapshot SHA-256: 0fb59eb02aa47e86f3682a71f224af324d69aba56671c518bd1178dbfd538a4e
+Files included: 107
+
+Ticket PP-014 local checks passed.
+**********************
+Windows PowerShell transcript end
+End time: 20261122143424
+**********************
