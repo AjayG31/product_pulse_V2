@@ -29,3 +29,13 @@ def test_each_new_connection_enables_foreign_keys(tmp_path):
     finally:
         engine.dispose()
 
+
+def test_approved_worker_busy_timeout_is_five_seconds(tmp_path):
+    settings = Settings(data_dir=tmp_path / "approved-timeout", sqlite_busy_timeout_ms=5000)
+    engine = create_database_engine(settings)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(text("PRAGMA busy_timeout")).scalar_one() == 5000
+    finally:
+        engine.dispose()
+

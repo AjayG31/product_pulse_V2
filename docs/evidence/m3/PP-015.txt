@@ -1,0 +1,41 @@
+ProductPulse M3 acceptance evidence — PP-015
+Date: 24 November 2026
+Outcome: Done
+
+Authorization and readiness
+- Product Owner approved M3 for PP-018, PP-034, PP-035, PP-015, and PP-036 in that order.
+- Fresh start-time recheck passed before PP-015: PP-011, PP-014, PP-004, and PP-018 were Done with retained evidence; the PP-005 taxonomy-version applicability and attempt-selection dispositions were approved and aligned; DAI-06 coverage calibration remains Pending Calibration, with UNKNOWN fail-closed handling approved for this scope.
+- Governing contracts reviewed: AGENTS.md; Definition of Done; Implementation Plan; PRD v1.7; API_SPEC.yaml v1.5.4; DATA_MODEL.md v1.5.5; Security v1.1; DAI-01/02/06; PP-005; PP-018; PP-015.
+- No approved requirements/specification changed. Initial taxonomy seed, issue-code policy, AI model/provider execution, active detection, incident changes, notifications, and external side effects remain outside this ticket.
+
+Acceptance criteria mapping and results
+- C1-C2 / reference imports: `tests/test_linkage_reconciliation.py::test_reference_imports_fill_only_missing_fields_and_preserve_conflicts` covers product/supplier/batch reference imports, known-ID requirements for batches, fill-only-missing display fields, preserved differing values, durable conflict recording, confirmation replay, and absence of classification jobs for reference imports. Existing ingestion confirmation/preview tests cover hash binding, CSRF/Admin boundary, rollback, source immutability, and preview behavior.
+- C1-C2 / linkage: `test_admin_linkage_is_exact_audited_idempotent_and_historical_only` and `test_linkage_requires_exact_existing_supplier_and_batch` cover Admin-only CSRF-protected updates, exact supplier/batch/product matching, stale expected-state conflict, idempotency replay/conflict, append-only event/audit, a 3-claim RECONCILIATION job, and unchanged source identity/text/event time/original reported IDs.
+- C1-C2 / reconciliation and integrity: the worker recomputes source-level counts from all persisted feedback facts for the product and stores an append-only fingerprinted audit record with coverage UNKNOWN and incident application NOT_APPLICABLE. It validates the current lease and is idempotent; only known-safe SQLITE_BUSY is retryable. No detection handler is registered and the test verifies that this work creates no DetectionResult.
+- C1-C2 / taxonomy-scoped product aggregates: `test_product_aggregates_are_scoped_to_explicit_taxonomy_and_attempt_authority` covers mandatory valid taxonomy IDs, latest qualifying within-version selection with binary classification-ID tie-break, no fallback to another version, distinct unclassified and LINKAGE_PENDING counts, and exact version echo in list/detail responses. Product summaries are query-time views derived from source facts and the caller-supplied taxonomy version.
+- C1-C2 / historical result contract: `test_historical_result_fingerprint_persists_exact_taxonomy_and_fails_closed` covers version/rule/job consistency, immutable version inputs, source-text exclusion, UNKNOWN coverage states, insufficient-coverage result state, and NOT_APPLICABLE incident application. Migration tests verify existing unversioned DETECTION work fails closed and database constraints/triggers require immutable explicit version context.
+- C3-C4: Backend acceptance, regression, security, and dependency checks passed below. PP-015 changed no frontend behavior; frontend checks were not applicable. No criterion required human-only observation.
+
+Commands and results
+- `.tools/bin/uv.exe run --locked pytest tests/test_migrations.py tests/test_linkage_reconciliation.py tests/test_ingestion_preview.py tests/test_ingestion_confirmation.py -q` — 24 passed; one existing Starlette TestClient/httpx deprecation warning.
+- `.tools/bin/uv.exe run --locked pytest tests/test_retry_budgets.py tests/test_worker_entry.py -q` — 5 passed.
+- `.tools/bin/uv.exe run --locked pytest -q` — 103 passed; one existing Starlette TestClient/httpx deprecation warning.
+- `.tools/bin/uv.exe run --locked bandit -r productpulse` — passed, exit code 0; no issues identified across 5,784 lines. The approved local cache/temp environment was used (`UV_CACHE_DIR=.tools/cache`, `UV_PYTHON_INSTALL_DIR=.tools/python`, `LOCALAPPDATA=.tools/cache/appdata`, temporary paths under `.tools`).
+- `.venv/Scripts/pip-audit.exe --cache-dir .tools/pip-audit-cache` — passed; no known vulnerabilities. The read-only PyPI lookup used the approved sandbox network escalation after the sandbox-only attempt could not reach PyPI.
+- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/source-fingerprint.ps1` — implementation source snapshot SHA-256 `35c386d44052e63edb71e75367a6dc3160a1c6fcf4da0ffaec0f5ef6fcce0d60` (141 files).
+- Git revision unavailable because `git.exe` is not available in this execution environment. No commit, push, merge, or deployment was performed.
+
+Review and security/data-integrity findings
+- Backend authorization is enforced with the Admin session dependency and CSRF check. Business User mutation attempts are denied. Validation requires an existing supplier and an existing batch belonging to the feedback product and selected supplier; stale linkage state returns conflict.
+- The linkage update, immutable linkage event, reconciliation job, and audit record share one immediate SQLite transaction. Idempotency replays return the original response, and a changed request under the same key conflicts. The update does not change source text, source identity, event time, or originally reported identifiers.
+- Reference imports fill only missing display fields. Existing conflicting values are preserved and recorded as pending reference-mapping conflicts; reference imports do not enqueue classifier work.
+- Version-specific aggregate selection fails closed without a valid explicit taxonomy version. Classification attempts from other versions are not used as fallback. Linkage-pending feedback remains separately counted and excluded from linked definitive defect counts.
+- Historical reconciliation records source-derived counts and a source fingerprint only. Coverage remains UNKNOWN. No incident or outbox write occurs, and detection activation is not registered. No OpenAI call/key, notification delivery, or external side effect was introduced.
+- No in-scope authorization or integrity finding remains.
+
+Remaining risks and limitations
+- Exact source/classification coverage scope and calibration remain Pending Calibration. Initial taxonomy seed, issue-code policy, model selection, and classifier/provider execution remain gated under their owning decisions/tickets. Historical work stays evidence-only and cannot activate detection or affect incidents/notifications.
+- The current linkage reconciliation worker records source-level historical counts; classification-backed product views are computed at read time for an explicit taxonomy version. It does not produce incident-applicable current detection results.
+- The migration was tested on isolated temporary databases only. Applying it to an application database remains subject to the approved quiescence and coherent SQLite-plus-artifact backup hold point.
+
+No commit, push, merge, or deployment was performed.

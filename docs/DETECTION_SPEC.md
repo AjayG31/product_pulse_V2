@@ -3,14 +3,14 @@
 **Version:** 1.1  
 **Status:** Draft clarification pending review; v1.0 remains the Approved — Design Baseline  
 **Prior approval date:** 21 November 2026  
-**Clarification date:** 21 November 2026  
-**Requirements source:** [PRD](PRD.md) v1.6  
-**Related decisions:** Decision Register v1.4; PB-01 Pending Calibration; PB-03 Approved; PB-04 Approved with notification edge cases open; PB-05 definitions pending; PB-06 Approved; PB-09 Approved; DAI-04 Approved; DAI-06 methodology confirmed, parameters Pending Calibration; EV-01/02/03 Pending Calibration  
-**Related contracts:** [Architecture](ARCHITECTURE.md) v1.3 Approved; [Data Model](DATA_MODEL.md) v1.4 Approved — Design Baseline (conditional; v1.1 was previous approved baseline); [API](API_SPEC.yaml) v1.4.0 Approved — Design Baseline (conditional; v1.1.0 was previous approved version); [Alert Specification](ALERT_SPEC.md) v0.2 Draft; [AI Specification](AI_SPEC.md) v1.0 Approved — Design Baseline
+**Clarification dates:** 21, 23, and 24 November 2026  
+**Requirements source:** [PRD](PRD.md) v1.7  
+**Related decisions:** Decision Register v2.3; PB-01 Pending Calibration; PB-03 Approved; PB-04 Approved with notification edge cases open; PB-05 definitions pending; PB-06 Approved; PB-09 Approved; DAI-04 Approved; PP-005 attempt selection and taxonomy-version applicability approved; DAI-06 linkage-recomputation boundary approved, coverage parameters Pending Calibration; EV-01/02/03 Pending Calibration  
+**Related contracts:** [Architecture](ARCHITECTURE.md) v1.6 Approved; [Data Model](DATA_MODEL.md) v1.5.5 Approved — Design Baseline (conditional); [API](API_SPEC.yaml) v1.5.4 Approved — Design Baseline (conditional); [Alert Specification](ALERT_SPEC.md) v0.3 Draft; [AI Specification](AI_SPEC.md) v1.2 Approved — Design Baseline with scoped clarification
 
 ## Approval boundary and terminology
 
-The PRD remains the product-requirements source of truth. The Product Owner approved v1.0 as a conditional design baseline on 21 November 2026. This v1.1 draft records the user-authorized clarification that non-definitive classifications are excluded from confirmed defect counts, DAI-06 determines coverage sufficiency, and automatic detection remains disabled until required coverage policy and calibration are approved. This clarification does not activate automatic detection or approve pending calibration values. The unresolved authoritative classification-attempt selection rule is a pre-implementation dependency for classification counting.
+The PRD remains the product-requirements source of truth. The Product Owner approved v1.0 as a conditional design baseline on 21 November 2026. This v1.1 document remains a draft clarification. On 23 November, the Product Owner approved two scoped clarifications in this document: (1) DAI-06 linkage-triggered recomputation uses exact approved identifiers, preserves LINKAGE_PENDING, rebuilds aggregates from source facts, leaves unestablished coverage UNKNOWN, and cannot change incidents, notifications, or detection activation; and (2) PP-005 attempt selection chooses the latest validated definitive completion per source record and applicable taxonomy version, using persisted completion order and a unique ID tie-breaker, without additive attempts or loss of historical traceability. On 24 November, the Product Owner approved the explicit taxonomy-version applicability policy below. The 21 November clarification that non-definitive classifications are excluded from confirmed defect counts and automatic detection remains gated also remains in the approval boundary. The rest of v1.1 remains draft.
 
 Labels used below:
 
@@ -71,7 +71,23 @@ A feedback record is eligible for a given logical-defect cluster only when all o
 
 Count one distinct feedback record at most once in a given cluster and period, even if it repeats the same issue in its text or multiple labels map to that logical defect. If PRIMARY and SECONDARY labels map to the same logical_defect_id, count the feedback once and cite PRIMARY in detection_evidence. Use SECONDARY only when no valid PRIMARY label maps to that cluster. A record may contribute once to each of two distinct logical-defect clusters when it has validated distinct defect labels. The counting unit is a feedback record, not the return_quantity.
 
-Only an applicable completed classification is counted. The AI specification preserves immutable attempts, but the cross-document contract does not state which completed attempt is authoritative if one feedback record has more than one completed attempt. The authoritative selection rule is unresolved and is a pre-implementation dependency: do not implement classification counting across multiple completed attempts until the rule is explicitly approved and aligned across AI_SPEC.md, DATA_MODEL.md, and this specification. Using the highest attempt_number is only a candidate for review, not an approved rule. Attempts must never be counted additively.
+### Approved classification-attempt selection rule (23 November 2026)
+
+For each feedback record and applicable `taxonomy_version_id`, select the latest successfully completed, fully validated classification attempt. A qualifying result has `status=COMPLETED`, `needs_review=false`, a definitive outcome, and validated labels. Order by persisted UTC `completed_at DESC`, then unique `classification_id COLLATE BINARY DESC` when timestamps tie. Failed, pending, invalid/terminal-failed, and needs-review attempts never replace a qualifying completed result. Preserve all immutable attempts and audit/source traceability. Count a source record at most once in an applicable cluster/window context; attempts are never additive. The existing rule allowing one record to contribute to distinct logical-defect clusters via distinct validated labels remains in force.
+
+This rule selects the latest valid result within the one applicable taxonomy version for each context. The initial taxonomy seed and other_product_defect issue-code policy remain unapproved; they do not change the version-selection rule.
+
+### Approved taxonomy-version applicability policy (24 November 2026)
+
+An aggregation context is one classification-backed calculation with a defined source cohort and filters/windows. Every context has exactly one explicit `taxonomy_version_id`:
+
+- For persisted detection contexts, the Admin explicitly supplies the ID in the immutable detection-rule configuration. The backend validates it and snapshots it on the durable DETECTION job before claim, then persists the same ID on the detection result and includes it in the canonical result input fingerprint.
+- For read-time dashboard/product aggregation requests, the caller supplies one exact `taxonomy_version_id`; the response echoes it in `applied_filters`. A classification-derived request without an ID is rejected. No implicit current, active, or latest-version selection is permitted.
+- Recomputing an existing context, including linkage-triggered historical recomputation, reuses its persisted ID. Creating a new context requires a new explicit assignment. Retries and replays keep the snapshotted ID if taxonomy activation changes.
+- For that version only, use the latest validated `COMPLETED` attempt selected by the 23 November rule. If none exists, including when valid completions exist only under another version, exclude the record from definitive defect counts and surface it as unclassified for that context. A valid definitive NO_DEFECT is classified but is not a defect count.
+- Keep unclassified counts separate from definitive defect counts and coverage state. Historical results retain their version; separate versions do not share an aggregate count even when their codes map to the same `logical_defect_id`. Taxonomy changes do not automatically reclassify historical records.
+
+This policy does not activate detection. Historical recomputation remains evidence-only and cannot create/update incidents, send notifications, or activate detection.
 
 ## 3. Product, supplier, and batch linkage; PB-06
 
@@ -83,9 +99,13 @@ For LINKAGE_PENDING records:
 - Include completed defect classifications in clearly labeled product-level pending analytics, separately from fully linked defect totals. Pending-defect breakdowns may be grouped by product and logical_defect_id; these are not incident-capable clusters.
 - Exclude these records from supplier/batch cluster counts, cluster evidence, incident creation, severity, and automatic notification eligibility.
 - Do not create a product-only defect_clusters row or incident, even if the product and defect label are known.
-- When Admin reconciliation changes linkage to LINKED, append the linkage event/audit evidence and schedule recomputation for the newly resolved batch cluster. Preserve source text, source identity, event time, and originally reported IDs.
+- When Admin reconciliation changes linkage to LINKED, append the linkage event/audit evidence and schedule historical recomputation for affected aggregates. Preserve source text, source identity, event time, and originally reported IDs.
 
 These are Approved PB-06 rules. They supersede any looser interpretation of product-level analytics in the PRD: product-level visibility for unresolved links does not authorize product-only incidents or emails.
+
+### DAI-06 approved linkage-recomputation boundary (23 November 2026)
+
+Use only exact existing product, supplier, batch, feedback, and logical-defect identifiers supplied by validated source/reference/linkage records. Keep records with unresolved required identifiers as LINKAGE_PENDING; do not infer or fabricate an identifier. Rebuild affected aggregates from persisted source facts rather than applying counter deltas. Do not create or imply a source-coverage declaration during recomputation; coverage remains UNKNOWN when approved evidence does not establish it. This work is tagged HISTORICAL_RECOMPUTE and cannot create, update, reopen, or apply an incident, send a notification, or activate detection. This approved boundary does not settle the candidate coverage algorithm or any calibration value below.
 
 ## 4. Event-time windows and historical baseline
 
@@ -201,9 +221,9 @@ source_type + source_record_id → feedback_id → applicable classification_id 
 
 For each result, persist or reference:
 
-- Stable result identity, cluster_id, rule_version, coverage_policy_version, evaluation_mode, evaluated_at, and exact observed/baseline UTC boundaries.
+- Stable result identity, cluster_id, `taxonomy_version_id`, rule_version, coverage_policy_version, evaluation_mode, evaluated_at, and exact observed/baseline UTC boundaries.
 - Distinct observed_count and baseline_28d_count; normalized_baseline_7d and ratio where mathematically valid.
-- Source coverage_state, classification completeness states and assessed/complete counts, decision_state, and applicable coverage declaration IDs/statuses.
+- Source coverage_state, classification completeness states and assessed/complete counts per period, derived unclassified counts per period, decision_state, and applicable coverage declaration IDs/statuses.
 - Every counted feedback_id, classification_id, label_role, logical_defect_id, and evidence_period (OBSERVED or BASELINE).
 - For incident changes, detection_result_id in incident_events plus before/after status and severity where applicable.
 - Linkage status and source drill-down context. Do not expose raw feedback text in operational logs or safe error summaries.
@@ -229,7 +249,7 @@ Filters on dashboard charts do not change detection-rule windows or the persiste
 
 ### Persisted result contract
 
-The DATA_MODEL.md v1.4 detection_results row is the storage contract. Required semantic fields are:
+The DATA_MODEL.md v1.5.5 detection_results row is the storage contract. Required semantic fields are:
 
 | Field | Meaning |
 |---|---|
@@ -243,7 +263,7 @@ The DATA_MODEL.md v1.4 detection_results row is the storage contract. Required s
 | classification coverage | `COMPLETE`, `INCOMPLETE`, or `UNKNOWN` with assessed and definitive-complete record counts for the relevant windows. |
 | decision_state / severity | NO_TRIGGER, TRIGGERED, or INSUFFICIENT_COVERAGE; severity MEDIUM/HIGH/CRITICAL only for a validated trigger. |
 
-API_SPEC.yaml v1.4.0 (Approved — Design Baseline, conditional) retains paginated `GET /detection-results` for ADMIN and BUSINESS_USER roles. It returns rationale for `NO_TRIGGER`, `INSUFFICIENT_COVERAGE`, and `TRIGGERED` evaluations, including evidence counts by period, baseline source-coverage status, classification-completeness assessment, rule and coverage-policy versions, evaluation time, thresholds, and coverage declarations. This read-only list applies the existing page/page_size limits and backend authorization. IncidentDetail continues to expose the latest rationale for an incident.
+API_SPEC.yaml v1.5.4 (Approved — Design Baseline, conditional) retains paginated `GET /detection-results` for ADMIN and BUSINESS_USER roles. It returns rationale for `NO_TRIGGER`, `INSUFFICIENT_COVERAGE`, and `TRIGGERED` evaluations, including the exact taxonomy version, evidence and unclassified counts by period, baseline source-coverage status, classification-completeness assessment, rule and coverage-policy versions, evaluation time, thresholds, and coverage declarations. This read-only list applies the existing page/page_size limits and backend authorization. Results from different taxonomy versions remain separate and may be filtered by version. IncidentDetail continues to expose the latest rationale for an incident.
 
 The existing detection rule API fixes observed_window_days=7 and baseline_window_days=28 and carries per-severity minimum_observed_count and nullable minimum_observed_to_baseline_ratio. Null ratio means count-only behavior for a complete zero baseline. It does not make the PRD hypothesis values active defaults.
 
@@ -255,11 +275,11 @@ The API keeps `normalized_baseline_7d=0` for a sufficient zero baseline and retu
 
 DATA_MODEL.md requires stable work_key and result_key values. `result_key` is the SHA-256 fingerprint of one canonical UTF-8 JSON input snapshot. Construction:
 
-1. Include cluster_id, evaluation_mode, exact four UTC window boundaries, rule_version, coverage_policy_version and canonical coverage-policy configuration, source coverage assessment, classification-completeness assessment/counts, and sorted source-coverage tuples with assessed status.
+1. Include cluster_id, the explicit taxonomy_version_id, evaluation_mode, exact four UTC window boundaries, rule_version, coverage_policy_version and canonical coverage-policy configuration, source coverage assessment, classification-completeness assessment/counts, and sorted source-coverage tuples with assessed status.
 2. Include sorted state tuples for every feedback record in the applicable observed and baseline source cohorts, not only counted defect evidence. Each tuple includes feedback_id, event_time_utc, linkage_status and resolved linkage IDs, relevant classification attempt/state/revision, and (when definitive) selected classification_id, defect outcome, needs_review, and validated logical-defect label mappings. Include counted evidence tuples with evidence_period and preferred label role. Do not include source text or other free text.
-3. Serialize with deterministic key ordering and separators and hash with SHA-256. A change in pending/failed/needs-review/completed/no-defect state, source coverage, either policy version, windows, rule, or evaluation mode changes the fingerprint. In particular, a transition from pending to definitive no-defect creates a new result key and cannot leave a stale insufficient result current. A retry with identical inputs resolves to the same immutable result.
+3. Serialize with deterministic key ordering and separators and hash with SHA-256. A change in pending/failed/needs-review/completed/no-defect state, source coverage, taxonomy version, either policy version, windows, rule, or evaluation mode changes the fingerprint. In particular, a transition from pending to definitive no-defect creates a new result key and cannot leave a stale insufficient result current. A retry with identical inputs resolves to the same immutable result.
 
-Fix evaluated_at/T for a durable work item before first calculation and preserve it across retries. The authoritative classification-attempt selection policy remains an open AI/data-model dependency; once approved, the fingerprint includes the attempt identity/state selected under that policy and any relevant state transition.
+Fix evaluated_at/T and taxonomy_version_id for a durable work item before its first calculation and preserve both across retries. The fingerprint includes the selected attempt identity/state under the approved per-version rule, unclassified source states, and any relevant state transition.
 
 ### Persistence and retry behavior
 
@@ -269,7 +289,7 @@ Fix evaluated_at/T for a durable work item before first calculation and preserve
 - In one short SQLite transaction, re-read the pending result and current incident/episode, apply lifecycle/recurrence and any severity increase, write the idempotent incident event, write the required outbox event and recipient snapshot when ALERT_SPEC requires one, then set the result to `APPLIED`. The incident state, audit event, application-state update, and required outbox data commit or roll back together under ARC-07.
 - Use a stable incident event key derived from detection_result_id and application action. On retry, if the event already exists, verify its incident/outbox effects and mark application complete in the same transaction; never duplicate them. Event/outbox uniqueness protects against concurrent retries.
 - External email I/O happens only after commit. External provider delivery is not exactly-once.
-- Persist failed/retryable work visibly. Numeric attempt limits, backoff, lease duration/recovery, scheduled reconciliation cadence, and SQLITE_BUSY behavior remain OPS-02/ARC-04 decisions; this document does not assign numeric values.
+- Persist failed/retryable work visibly. PP-007 supplies the approved lease/recovery, scheduled reconciliation, SQLite busy, and 5/15/45-second retry-delay values. The 23 November OPS-02 clarification sets max_attempts=3 for RECONCILIATION and M3 historical DETECTION jobs; retry only known-safe transient failures. Provider-specific behavior and other unapproved job types remain outside this scope. Historical linkage recomputation always has incident_application_state=NOT_APPLICABLE and cannot activate detection.
 
 ### Concurrency
 
@@ -297,6 +317,8 @@ Implement tests for the cases below once the required calibration and test-tool 
 
 - Half-open interval membership at exactly T−35d, T−7d, and T; UTC normalization and no local-time drift.
 - Distinct feedback counting when text repeats an issue, duplicate labels are attempted, or two classification attempts exist; when PRIMARY and SECONDARY map to one logical defect, count once and cite PRIMARY.
+- Two qualifying classifications under one version select by `completed_at DESC`, then binary `classification_id DESC`; a qualifying completion under another version does not fall back into the selected context. Missing valid results are shown as unclassified, while valid NO_DEFECT is classified.
+- Result identity, evidence, unclassified counts, and API output remain scoped to one explicit taxonomy version; equivalent logical_defect_id values across versions do not merge historical counts.
 - Result fingerprint changes when relevant classification state changes from pending to definitive no-defect, when completeness assessments change, or when the coverage-policy version changes; identical snapshots remain idempotent.
 - One record contributes once to each distinct logical defect, but never twice to the same logical_defect_id cluster/period.
 - Cross-taxonomy versions with explicitly shared logical_defect_id join one cluster; a changed meaning/new ID remains separate.
@@ -347,7 +369,7 @@ Implement tests for the cases below once the required calibration and test-tool 
 | PRD §14; AC17; EV-01/EV-03/EV-04 | Planted-episode recall, false positives, locked held-out data, and identical-stream baseline comparison (§12–13). |
 | PRD AC24; AI_SPEC §§3, 7, 11 | Only definitive completed classifications count; failures/uncertainty reduce visible coverage and are not NO_DEFECT (§2, 5, 13). |
 | DATA_MODEL §§4.7, 5–6 | Cluster, immutable result, evidence, coverage snapshot, incident and idempotency fields (§§2, 9, 11). |
-| API_SPEC dashboard, incident, detection-result, detection-rule, and source-coverage contracts | The API v1.4.0 draft retains the paginated detection-result rationale introduced in last-approved v1.1.0 and preserves calibration-pending rule activation (§10). |
+| API_SPEC dashboard, incident, detection-result, detection-rule, and source-coverage contracts | API_SPEC v1.5.4 carries explicit taxonomy-version selection/echo, unclassified counts, and version-scoped results while preserving calibration-pending rule activation (§10). |
 
 ## 15. Open decisions and calibration dependencies
 
@@ -355,12 +377,12 @@ Implement tests for the cases below once the required calibration and test-tool 
 |---|---|---|
 | PB-01 minimum counts and nonzero-baseline ratio thresholds | Pending Calibration. PRD table is provisional only. | Activating a rule for incident/email creation and final detection evaluation. |
 | Minimum support count for a nonzero baseline | Not specified; no default may be inferred from the PRD ratio formula. | Deciding when the normalized ratio is sufficiently supported for automatic severity. |
-| DAI-06 source/classification coverage scope and gate | Assessment states/counts and fingerprint inputs are approved; exact source scope, interval combination, classifier-completion policy, and any threshold remain Pending Calibration. No numeric gate is approved. | Finalizing when incomplete source/classification coverage may support automatic decisions; do not activate automatic detection before this is resolved. |
+| DAI-06 source/classification coverage scope and gate | Linkage-triggered historical recomputation constraints are approved on 23 November; exact source scope, interval combination, classifier-completion policy, and any threshold remain Pending Calibration. No numeric gate is approved. | Finalizing when incomplete source/classification coverage may support automatic decisions; do not activate automatic detection before this is resolved. |
 | Authoritative classification attempt when multiple attempts are COMPLETED | Unresolved; pre-implementation dependency. The highest-attempt proposal in §2 is not approved. | Implementing classification counting across retries or multiple completed attempts; align AI_SPEC.md, DATA_MODEL.md, and this specification first. |
 | Evaluation instant and scheduled detection/reconciliation cadence | Windows are defined; operational cadence is open under OPS-02/ARC-04. | Worker scheduling and freshness promises. |
 | Historical recomputation retention and cadence | PB-09 approves immutable historical recomputation without incident/outbox application; retained horizon and operational cadence remain open. | Selecting retention and scheduled reconciliation parameters. |
 | Severity decreases/re-crossings and notification interaction | PB-04 core cooldown/escalation approved; edge cases belong to ALERT_SPEC. | Complete automatic notification behavior. |
-| Detection result read API | Introduced in API_SPEC.yaml v1.1.0 and retained in the v1.4.0 Approved — Design Baseline as paginated read-only `GET /detection-results`. | Contract is specified; backend implementation remains downstream. |
+| Detection result read API | Retained in API_SPEC.yaml v1.5.4 Approved — Design Baseline as paginated read-only `GET /detection-results`. | Contract is specified; backend implementation remains downstream. |
 | PB-05 definitions for active warnings, critical warnings, products at risk | Metric-glossary creation approved; definitions pending. | Returning numeric values for those KPIs. |
 | EV-01 held-out data size and minimum representation | Pending Calibration. | Locking held-out evaluation or claiming stable evaluation metrics. |
 | EV-02 class-specific classification gates | Pending Calibration under AI_SPEC.md; no final class gates are set here. | Finalizing classification evaluation or dependent held-out gates. |
@@ -369,17 +391,17 @@ Implement tests for the cases below once the required calibration and test-tool 
 
 ## 16. Consistency review and approval boundary
 
-The v1.0 approval review used AGENTS.md and PRD v1.6, Decision Register v1.2, Architecture v1.3, Data Model v1.2 (Draft update), API_SPEC.yaml v1.1.0 (Approved at that review), AI_SPEC.md v1.0, and TECH_STACK.md v0.7. Current linked baselines API_SPEC.yaml v1.4.0, DATA_MODEL.md v1.4, and UI_SPEC.md v0.3 are Approved — Design Baselines subject to documented conditions; ALERT_SPEC.md v0.2 remains Draft.
+The v1.0 approval review used AGENTS.md and PRD v1.6, Decision Register v1.2, Architecture v1.3, Data Model v1.2 (Draft update), API_SPEC.yaml v1.1.0 (Approved at that review), AI_SPEC.md v1.0, and TECH_STACK.md v0.7. Current linked baselines API_SPEC.yaml v1.5.4, DATA_MODEL.md v1.5.5, and UI_SPEC.md v0.4.3 are Approved — Design Baselines subject to documented conditions; AI_SPEC.md v1.2 includes the scoped approved attempt-selection and applicability clarifications; ALERT_SPEC.md v0.3 remains Draft.
 
 Consistency findings:
 
 - The deterministic backend boundary, event-time windows, distinct feedback counting, zero-baseline treatment, PB-06 behavior, source lineage, immutable rule/results, and approved 30-day recurrence rule align with the reviewed specifications.
 - Where PRD §9.1 says no automatic warning under insufficient history, this specification adopts the stricter and explicit Architecture/Data Model/API behavior: no automatic incident and no automatic email. That also follows the user's instruction for this deliverable.
 - The PRD's 5/10/20 counts and 2×/3×/5× ratios are consistently labeled provisional. PB-01 stays Pending Calibration; DAI-06 method is preserved without approving its coverage values.
-- The updated API and Data Model define the read-only no-incident rationale, classification/coverage fingerprint inputs, and recoverable application state. PB-09's historical recomputation boundary and primary-label evidence tie-break are reflected consistently.
-- No contradiction was found with the PRD requirements, approved Architecture, SQLite single-writer constraint, PB-06 linkage boundary, or PB-03 recurrence rule. `DATA_MODEL.md` v1.4 is an Approved — Design Baseline subject to documented conditions. The v1.0 detection baseline remains approved; this v1.1 clarification is still a draft pending review.
-- The authoritative-classification selection rule remains an unresolved pre-implementation dependency. DAI-06 exact coverage scope/completeness/gating parameters, PB-01 thresholds, EV-01/02/03 calibration parameters, and PB-04/ALERT_SPEC notification edge cases also remain open. None is approved by this document.
+- The updated API and Data Model define the read-only no-incident rationale, classification/coverage fingerprint inputs, and recoverable application state. PB-09's historical recomputation boundary and primary-label evidence tie-break are reflected consistently. The approved DAI-06 linkage-recomputation boundary and PP-005 within-version attempt-selection rule are recorded above; these scoped approvals do not approve the rest of this draft.
+- No contradiction was found with the PRD requirements, approved Architecture, SQLite single-writer constraint, PB-06 linkage boundary, or PB-03 recurrence rule. `DATA_MODEL.md` v1.5.5 and `API_SPEC.yaml` v1.5.4 are Approved — Design Baselines subject to documented conditions. The v1.0 detection baseline remains approved; this v1.1 clarification remains a draft pending review except for the expressly approved DAI-06 linkage-recomputation and PP-005 attempt-selection/applicability clauses dated 23–24 November 2026.
+- The explicit one-version-per-context applicability policy and within-version attempt rule are approved. The initial taxonomy seed and other_product_defect issue-code policy, DAI-06 exact coverage scope/completeness/gating parameters, PB-01 thresholds, EV-01/02/03 calibration parameters, and PB-04/ALERT_SPEC notification edge cases remain open. No other v1.1 draft proposal is approved here.
 
-**Approval:** The Product Owner approved `DETECTION_SPEC.md` v1.0 as **Approved — Design Baseline** on 21 November 2026, with the conditions recorded above. This is a conditional design baseline only; it does not activate automatic detection or approve any calibration threshold. PB-01, DAI-06, EV-01/02/03, the authoritative-classification selection dependency, and the downstream ALERT_SPEC notification contract must be resolved before their dependent behavior is implemented or activated. No application code, migration, or ticket is included.
+**Approval:** The Product Owner approved `DETECTION_SPEC.md` v1.0 as **Approved — Design Baseline** on 21 November 2026, with the conditions recorded above, and separately approved the specific DAI-06 linkage and PP-005 attempt-selection clarification on 23 November and taxonomy-version applicability policy on 24 November. This is a conditional design baseline only; it does not activate automatic detection or approve any calibration threshold. PB-01, DAI-06, EV-01/02/03, the initial taxonomy seed/issue-code policy, and the downstream ALERT_SPEC notification contract remain gated before their dependent behavior is implemented or activated. No application code, migration, or ticket is included.
 
-**Current revision:** v1.1 is a draft clarification only. It does not replace the approved v1.0 baseline or approve any DAI-06 scope/completeness parameter, PB-01 threshold, or detection activation decision.
+**Current revision:** v1.1 remains a draft clarification and does not replace the approved v1.0 baseline. The expressly approved DAI-06 linkage-recomputation clause dated 23 November and PP-005 attempt-selection/applicability clauses dated 23–24 November 2026 are limited to their stated scope; no other v1.1 draft proposal, DAI-06 scope/completeness parameter, PB-01 threshold, taxonomy seed/issue-code choice, or detection activation decision is approved.

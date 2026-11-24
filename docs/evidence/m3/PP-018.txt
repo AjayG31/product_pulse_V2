@@ -1,0 +1,44 @@
+ProductPulse M3 acceptance evidence — PP-018
+Date: 24 November 2026
+Outcome: Done — worker retry rules completed; Admin recovery endpoint acceptance is assigned to PP-035
+
+Authorization and readiness
+- Product Owner approval for Milestone M3 and the five-ticket scope/order is recorded in M3_IMPLEMENTATION_BRIEF.md.
+- Start-time readiness recheck passed: PP-010, PP-014, and PP-007 are complete with retained M1/M2/PP-007 evidence; no incomplete ticket dependency remained.
+- Governing contracts: AGENTS.md; ARCHITECTURE.md §§6, 8; TECH_STACK.md SQLite/background-processing sections; DATA_MODEL.md §4.6; API_SPEC.yaml v1.5.4 processing-job contract; OPS-02; Definition of Done.
+
+Acceptance criteria mapping and results
+- C1-C2 / AC02, AC07: atomic one-item claims, 5-minute leases, 60-second lease renewals, lease-token stale-write rejection, restart recovery, short transaction boundaries, startup/60-second reconciliation cadence, SQLite BUSY rollback/retry behavior, and shared API/worker SQLite path are covered in tests/test_worker_runtime.py, tests/test_retry_budgets.py, tests/test_database.py, tests/test_worker_entry.py, and tests/test_migrations.py.
+- C1-C2 / budgets: approved total claim limits are enforced by database constraints and worker eligibility. CLASSIFICATION, INGESTION, RECONCILIATION, and historical DETECTION retain three total claims; BATCH_POLL must have NULL max_attempts and is never claimable. Ingestion worker retries require an explicit SAFE_REPLAY result; RECONCILIATION/DETECTION/CLASSIFICATION retries require known-safe transient classification. The 5/15/45-second sequence is preserved; the three-claim budget uses only the first two delays.
+- C3 scope boundary: on 24 November the Product Owner clarified that PP-018 builds worker retry rules and PP-035 owns the Admin recovery endpoint, including the audited new INGESTION run. PP-018's worker-side safe-replay enforcement is tested here; the API eligibility and audited new-run checks remain PP-035 acceptance work. PP-018 is Done; PP-035 and PP-015 may proceed subject to their fresh start-time checks.
+- C3-C4: the worker entry uses the configured SQLite path and 5-second busy timeout, without requiring PRODUCTPULSE_OPENAI_API_KEY. No provider handler is registered, and unsupported work remains queued. No OpenAI, detection calculation/activation, incident update, notification, or external email behavior was added.
+- Migration verification: Alembic upgrade from PP-014 preserves an existing queued CLASSIFICATION row and existing indexes; SQLite integrity and foreign-key checks pass. A downgrade refuses to proceed while an unbudgeted job exists; a clean downgrade restores the prior non-null budget schema and removes the attempts table. These checks use isolated temporary databases only; no application database was migrated.
+
+Commands and results
+- `.tools/bin/uv.exe run --locked pytest -q tests/test_worker_runtime.py tests/test_retry_budgets.py tests/test_migrations.py tests/test_worker_entry.py tests/test_database.py` — 21 passed (24 November 2026, after PP-034 migration tests were included).
+- `.tools/bin/uv.exe run --locked pytest -q` — 85 passed, 1 existing Starlette TestClient/httpx deprecation warning.
+- `python -m bandit -r productpulse` — passed; no issues identified across 3,731 lines of code.
+- `python -m pip_audit` — passed; no known vulnerabilities found. The read-only PyPI vulnerability lookup required the approved sandbox network escalation.
+- Frontend Vitest was not rerun for PP-018 because this ticket changed no frontend files. The pre-implementation baseline was 3 passed.
+- No human-only acceptance criterion remained: database restart/recovery and API/worker shared-file behavior are covered by automated tests.
+
+Tool versions
+- uv 0.13.9; Python 3.12.16; pytest 9.2.0; Bandit 1.9.4; pip-audit 2.10.1.
+- `uv` was invoked from the repository-pinned `.tools/bin/uv.exe`; cache and temporary paths were redirected under `.tools` per the local verification environment.
+
+Review and security/data-integrity findings
+- Code review confirmed write transactions end before registered job handlers execute; lease renewals and result persistence use separate short transactions.
+- Stale result writes are rejected when the token is no longer current or the lease has expired. Only the matching IN_PROGRESS attempt is finalized.
+- Handler exception text is neither logged nor persisted; persisted summaries are fixed safe messages and error codes are restricted to an uppercase stable-code form.
+- The migration preserves prior queued jobs and indexes. Unbudgeted jobs and unsupported handlers fail closed and remain visible/queued.
+- No in-scope security or authorization finding remains. No RBAC/API trust boundary was added by this worker-foundation ticket.
+- Review disposition: PP-018 is limited to worker retry mechanics; PP-035 implements and tests the Admin recovery endpoint and audited new-run behavior, as clarified by the Product Owner on 24 November. This records ownership without changing an approved requirement or specification. PP-018's worker-side safe-replay and retry-budget rules pass; PP-035 remains a separate gated ticket.
+
+Source identity
+- Git revision unavailable because `git.exe` is not available in this execution environment.
+- Worker-foundation source snapshot at PP-018 review: `08d977099d96545ac68214a634b545221405b48917da3a76c555c13945c58d3b` (115 files, from scripts/source-fingerprint.ps1). This fingerprint predates PP-034 changes.
+
+Remaining gates and limits
+- BATCH_POLL remains unbudgeted and unclaimable. OpenAI/classification provider handlers, active detection, incident-producing current results, and notifications remain outside PP-018 and fail-closed.
+- Before applying a migration to any application database, follow the approved PP-007/OPS-03/OPS-06 quiescence and coherent database/artifact backup procedure.
+- The Admin recovery/new-run acceptance check is assigned to PP-035; it is not a PP-018 check and is not represented as passed here. All executed PP-018 worker-foundation checks passed. No commit, push, merge, or deployment was performed.

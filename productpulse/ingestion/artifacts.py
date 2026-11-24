@@ -5,8 +5,9 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
-from typing import BinaryIO
+from typing import BinaryIO, Iterable
 
 from productpulse.ingestion.parser import MAX_FILE_BYTES, CsvInputError, safe_filename
 from productpulse.settings import Settings
@@ -65,6 +66,33 @@ class ArtifactStore:
         os.replace(staged.temporary_path, destination)
         return destination
 
+    def publish_chunks(self, artifact_id: str, chunks: Iterable[bytes]) -> tuple[Path, str, int]:
+        """Atomically publish generated artifact bytes and return path, hash, and size."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        destination = self._path_for_id(artifact_id)
+        if destination.exists():
+            raise ArtifactIntegrityError("Artifact identifier is already in use")
+        temporary_path: Path | None = None
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with tempfile.NamedTemporaryFile(prefix=".staging-", suffix=".tmp", dir=self.root, delete=False) as target:
+                temporary_path = Path(target.name)
+                for chunk in chunks:
+                    if not isinstance(chunk, bytes):
+                        raise TypeError("Generated artifact chunks must be bytes")
+                    target.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary_path, destination)
+            return destination, digest.hexdigest(), size
+        except Exception:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise
+
     def discard_stage(self, staged: StagedUpload) -> None:
         staged.temporary_path.unlink(missing_ok=True)
 
@@ -94,6 +122,26 @@ class ArtifactStore:
         if digest.hexdigest() != expected_sha256:
             raise ArtifactIntegrityError("The protected artifact integrity check failed")
         return path
+
+    def open_verified(self, artifact_id: str, expected_sha256: str) -> BinaryIO:
+        """Open and verify an artifact using the same handle later streamed to the client."""
+        path = self._path_for_id(artifact_id)
+        if not path.is_file() or path.is_symlink():
+            raise ArtifactIntegrityError("The protected artifact is unavailable")
+        handle = path.open("rb")
+        try:
+            if path.is_symlink() or not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ArtifactIntegrityError("The protected artifact is unavailable")
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(64 * 1024), b""):
+                digest.update(chunk)
+            if digest.hexdigest() != expected_sha256:
+                raise ArtifactIntegrityError("The protected artifact integrity check failed")
+            handle.seek(0)
+            return handle
+        except Exception:
+            handle.close()
+            raise
 
     def _path_for_id(self, artifact_id: str) -> Path:
         if not _ARTIFACT_ID.fullmatch(artifact_id):

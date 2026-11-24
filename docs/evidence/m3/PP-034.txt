@@ -1,0 +1,46 @@
+ProductPulse M3 acceptance evidence — PP-034
+Date: 24 November 2026
+Outcome: Done
+
+Authorization and readiness
+- Product Owner approval for the bounded M3 milestone and ticket order is recorded in M3_IMPLEMENTATION_BRIEF.md.
+- Start-time readiness recheck passed: PP-013, PP-014, and PP-004 are complete; the parser, mapping, report, and security contracts align with the ticket.
+- Governing contracts: PRD v1.7; API_SPEC.yaml v1.5.4; DATA_MODEL.md v1.5.5; SECURITY.md v1.1 §§9.1, 14; EVALUATION_PLAN.md v0.6 SEC-P04/05; Definition of Done.
+- No approved requirement or API specification was changed. Detection activation, incident-producing results, and notifications remain gated.
+
+Acceptance criteria mapping and results
+- C1-C2 / AC03, AC23: partial acceptance, stable safe row reasons, parser boundaries, protected report publication, report links, and download are covered by tests/test_ingestion_preview.py and tests/test_ingestion_reports.py.
+- C1-C2 / report contents: only REJECTED and CONFLICT rows are included. DUPLICATE_NOOP rows, raw feedback, source headers, and original filenames are excluded. Included source identities are formula-escaped; CSV quoting and UTF-8 output are validated. Existing-source conflict coverage verifies that the persisted feedback payload remains unchanged.
+- C1-C2 / security: Admin report download succeeds; Business User access is denied with no report disclosure. A changed protected artifact fails closed with HTTP 503. The API verifies the stored SHA-256 from the same file handle used for streaming.
+- C1-C4 / integrity: generated reports are atomically published under opaque IDs and linked to preview metadata in SQLite. Artifact orphan reconciliation includes both uploads and reports. Cross-table artifact IDs are checked before allocation. Migration upgrade and downgrade behavior are tested only on isolated temporary databases.
+- C4: no criterion required human-only observation. UI link behavior is covered by Vitest.
+
+Commands and results
+- `.tools/bin/uv.exe run --locked pytest tests/test_ingestion_preview.py tests/test_ingestion_reports.py tests/test_migrations.py -q` — 15 passed, 1 existing Starlette TestClient/httpx deprecation warning.
+- `.tools/bin/uv.exe run --locked pytest -q` — 88 passed, 1 existing Starlette TestClient/httpx deprecation warning.
+- `npm.cmd test -- --run` — 3 Vitest tests passed.
+- `npm.cmd run build` — TypeScript check and Vite build passed. Vite reported the existing non-blocking 500 kB chunk-size advisory.
+- `.venv/Scripts/python.exe -m bandit -r productpulse -q` — passed, exit code 0, no findings.
+- `.venv/Scripts/python.exe -m pip_audit` — passed, no known vulnerabilities. The read-only vulnerability lookup used the approved sandbox network escalation.
+- No required PP-034 check was skipped or unavailable. No GitHub Actions or Playwright was used.
+
+Retained synthetic report artifact
+- File: [PP-034_report.csv](PP-034_report.csv)
+- SHA-256: `7db79e427353030846d8f6df641137a63cd8352ac49188c8142555e8b8598537`
+- Size: 454 bytes.
+- The artifact demonstrates formula-escaped source identities and safe reasons; it contains no raw feedback.
+
+Review and security/data-integrity findings
+- No in-scope security or authorization issue remains. Backend role enforcement occurs before report access; direct Business User access returns 403.
+- Downloaded bytes are integrity-checked before streaming. Missing/tampered protected artifacts return a safe 503 response without exposing filesystem paths or source content.
+- Preview generation does not persist feedback records. Conflicting source records remain unchanged, as verified by the existing-source conflict test.
+- Review found no unapproved business behavior, report content, application-code side effects, or API contract changes.
+
+Source identity
+- Git revision unavailable because `git.exe` is not available in this execution environment.
+- Implementation source snapshot SHA-256: `0e7d45451b64ed24844db8418a167dfeac9f4ad6b34e40f344f9907aae1eb791` (121 files, from scripts/source-fingerprint.ps1).
+
+Remaining gates and limits
+- The migration was exercised only against temporary databases. Applying it to any application database remains subject to the approved quiescence and coherent SQLite-plus-artifact backup hold point.
+- Detection activation, incident-producing current results, notifications, and all other M3 exclusions remain gated.
+- No commit, push, merge, or deployment was performed.

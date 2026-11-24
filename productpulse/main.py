@@ -13,9 +13,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from productpulse.api_common import ApiError, problem_response, request_id
 from productpulse.auth_api import router as auth_router
 from productpulse.auth_state import LoginThrottle, PreLoginTokens
+from productpulse.conflicts_api import router as conflicts_router
 from productpulse.logging_config import configure_logging
 from productpulse.ingestion_api import router as ingestion_router
 from productpulse.ingestion_confirmation import router as ingestion_confirmation_router
+from productpulse.ingestion_jobs_api import router as ingestion_jobs_router
+from productpulse.linkage_api import router as linkage_router
+from productpulse.product_api import router as product_router
 from productpulse.settings import Settings
 
 
@@ -50,14 +54,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request.state.request_id = uuid.uuid4().hex
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id(request)
-        if request.url.path.startswith(("/auth/", "/admin/users", "/admin/ingestion")):
+        if request.url.path.startswith(("/auth/", "/admin/users", "/admin/ingestion", "/admin/reconciliation")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, error: ApiError) -> JSONResponse:
         response = problem_response(request, error)
-        if request.url.path.startswith(("/auth/", "/admin/users", "/admin/ingestion")):
+        if request.url.path.startswith(("/auth/", "/admin/users", "/admin/ingestion", "/admin/reconciliation")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -83,7 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
             status_code=422,
         )
-        if request.url.path.startswith(("/auth/", "/admin/users", "/admin/ingestion")):
+        if request.url.path.startswith(("/auth/", "/admin/users", "/admin/ingestion", "/admin/reconciliation")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -118,6 +122,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(ingestion_router)
     app.include_router(ingestion_confirmation_router)
+    app.include_router(ingestion_jobs_router)
+    app.include_router(linkage_router)
+    app.include_router(conflicts_router)
+    app.include_router(product_router)
 
     return app
 

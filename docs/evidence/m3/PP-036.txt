@@ -1,0 +1,37 @@
+ProductPulse M3 acceptance evidence — PP-036
+Date: 24 November 2026
+Outcome: Done
+
+Authorization and readiness
+- Product Owner approved M3 for PP-018, PP-034, PP-035, PP-015, and PP-036 in that order.
+- Fresh start-time recheck passed immediately before PP-036: PP-012 and PP-014 were Done with retained M2 evidence; PP-004 was Done with the approved DAI-01/02 disposition; PP-015 was Done with passing evidence in `docs/evidence/m3/PP-015.txt`.
+- Governing contracts reviewed: AGENTS.md; Definition of Done; Implementation Plan; PRD v1.7; API_SPEC.yaml v1.5.4; DATA_MODEL.md v1.5.5; UI_SPEC.md v0.4.3; Security v1.1; Decision Register DAI-01/02; PP-004; PP-012; PP-014; PP-015; PP-036.
+- No conflict-resolution decision or other prerequisite remained open. No approved requirement/specification changed. The scope stayed separate from PP-015 linkage reconciliation and added no detection, incident, or notification behavior.
+
+Acceptance criteria mapping and results
+- C1-C2 / Admin API: `tests/test_conflict_resolution.py::test_conflict_list_filters_and_paginates_stably` covers Admin-only paginated list filters, stable page selection, detail reads, KEEP_EXISTING, and no mapping changes. `test_admin_source_conflict_is_safe_audited_and_idempotent` exercises direct anonymous and Business User list/detail/resolve denials, required CSRF, Admin detail, and successful resolution.
+- C1-C2 / DAI-01/02 choices: source conflicts permit KEEP_EXISTING/DISMISS only; attempted APPLY_INCOMING_REFERENCE returns 422 and source text, source identity, event time, payload hash, and stored Feedback remain unchanged. Reference conflicts support KEEP_EXISTING/DISMISS/APPLY_INCOMING_REFERENCE. Apply requires an expected existing-value SHA-256 matching the current mapping and, when captured, the conflict's original hash. Stale mapping returns 409 without changing conflict state, reference values, or audit history.
+- C1-C2 / provenance and audit: apply updates only validated incoming reference fields from the immutable preview row. Preview row status, normalized-row hash, and source-row provenance remain unchanged. Audit records actor, resolution note, decision, before/after mapping values and hashes, preview/row identity, and request fingerprint; source-payload audit contains hashes/IDs only and no raw feedback text. Audit failure rolls back the mapping and resolution transition together.
+- C1-C2 / integrity: BATCH_REFERENCE apply verifies exact existing Product/Supplier IDs and refuses a mapping change that would invalidate current Feedback batch links. Conflict resolution uses one `BEGIN IMMEDIATE` transaction; idempotent replay returns the original result, a changed request under the same key conflicts, and a different decision cannot resolve an already-reviewed conflict.
+- C3-C4: the whole backend suite and applicable backend security/dependency checks passed below. PP-036 changes no UI behavior, so frontend tests/build were not applicable. No criterion required human-only observation.
+
+Commands and results
+- `.tools/bin/uv.exe run --locked pytest tests/test_conflict_resolution.py -q` — 5 passed; one existing Starlette TestClient/httpx deprecation warning.
+- `.tools/bin/uv.exe run --locked pytest -q` — 108 passed; one existing Starlette TestClient/httpx deprecation warning.
+- `.tools/bin/uv.exe run --locked bandit -r productpulse` — passed, exit code 0; no issues identified across 6,170 lines.
+- `.venv/Scripts/pip-audit.exe --cache-dir .tools/pip-audit-cache` — passed; no known vulnerabilities. The read-only PyPI lookup used the approved sandbox network escalation.
+- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/source-fingerprint.ps1` — implementation source snapshot SHA-256 `32948066ad89880724a9d722ae501e5a04dde20a91ed22a7feadb82eff217a97` (145 files).
+- Git revision unavailable because `git.exe` is not available in this execution environment. No commit, push, merge, or deployment was performed.
+
+Review and security/data-integrity findings
+- All three endpoints require an active Admin session. Writes require valid session CSRF; direct anonymous and Business User requests are denied. Conflict responses use `Cache-Control: no-store` and explicit response fields that do not include normalized preview text or raw feedback.
+- Request parsing and expected-value hashes are validated server-side. Database queries are parameterized. Stale values and incompatible decisions fail with safe stable error codes; no path or raw feedback is included in errors.
+- Source conflicts cannot apply incoming source text. Reference application is atomic with state transition and audit. Failed audit persistence rolls back both. Existing Feedback's source text, event time, identity, and payload hash remain unchanged.
+- No in-scope security or authorization finding remains. No OpenAI/provider call, secret/API key, notification delivery, incident update, detection activation, external email, or real customer data was used.
+
+Remaining risks and limitations
+- A BATCH_REFERENCE change that would invalidate an existing Feedback batch/product/supplier link is rejected with `REFERENCE_MAPPING_IN_USE`; an Admin must preserve the existing mapping or resolve linkage through its separate approved workflow before applying a compatible mapping.
+- Applying an incoming reference after the current mapping changed since preview fails closed. The operator must create/review a fresh preview rather than applying a stale decision.
+- Conflict resolution is API-only in PP-036; the separate Admin UI remains assigned to its later ticket. No migration was executed against an application database.
+
+No commit, push, merge, or deployment was performed.

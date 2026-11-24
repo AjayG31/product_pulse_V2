@@ -18,6 +18,7 @@ class ApiError(Exception):
     detail: str
     title: str = "Request failed"
     headers: dict[str, str] | None = None
+    retry_eligibility: dict[str, object] | None = None
 
 
 def request_id(request: Request) -> str:
@@ -38,6 +39,8 @@ def problem_response(request: Request, error: ApiError) -> JSONResponse:
         "instance": request.url.path,
         "request_id": request_id(request),
     }
+    if error.retry_eligibility is not None:
+        body["retry_eligibility"] = error.retry_eligibility
     return JSONResponse(body, status_code=error.status, headers=error.headers)
 
 

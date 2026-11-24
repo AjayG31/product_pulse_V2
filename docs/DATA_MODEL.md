@@ -1,12 +1,12 @@
  ProductPulse SQLite Data Model
 
-**Version:** 1.5.2  
+**Version:** 1.5.5  
 **Status:** Approved — Design Baseline  
 **Requirements source:** [PRD](PRD.md) v1.7
-**Architecture:** [Architecture](ARCHITECTURE.md) v1.5, Approved  
-**Decision basis:** [Decision Register](DECISION_REGISTER.md) v2.0; [Tech Stack](TECH_STACK.md) v1.2.0; [Detection Spec](DETECTION_SPEC.md) v1.1 draft clarification; [Alert Spec](ALERT_SPEC.md) v0.3 draft  
-**Date:** 22 November 2026  
-**Approval date:** 22 November 2026
+**Architecture:** [Architecture](ARCHITECTURE.md) v1.6, Approved  
+**Decision basis:** [Decision Register](DECISION_REGISTER.md) v2.3; [Tech Stack](TECH_STACK.md) v1.2.1; [Detection Spec](DETECTION_SPEC.md) v1.1 draft clarification; [Alert Spec](ALERT_SPEC.md) v0.3 draft  
+**Date:** 24 November 2026  
+**Approval date:** 22 November 2026; M3 and classification-attempt contract clarifications: 23 November 2026; taxonomy-version applicability clarification: 24 November 2026
 
 ## 1. Purpose and approval boundary
 
@@ -74,6 +74,9 @@ erDiagram
     BACKGROUND_JOBS o|--o{ FEEDBACK_LINKAGE_EVENTS : recomputes
 
     TAXONOMY_VERSIONS ||--o{ TAXONOMY_CATEGORIES : defines
+    TAXONOMY_VERSIONS ||--o{ DETECTION_RULE_VERSIONS : selected_for
+    TAXONOMY_VERSIONS o|--o{ BACKGROUND_JOBS : detection_snapshot
+    TAXONOMY_VERSIONS ||--o{ DETECTION_RESULTS : evaluated_under
     TAXONOMY_CATEGORIES ||--o{ TAXONOMY_ISSUE_CODES : contains
     LOGICAL_DEFECTS ||--o{ TAXONOMY_ISSUE_CODES : identifies
     LOGICAL_DEFECTS o|--o{ CLASSIFICATION_LABELS : normalizes
@@ -318,7 +321,7 @@ The backend resolves artifact_id beneath the configured storage root and verifie
 
 #### ingestion_jobs
 
-Business-facing import state and counts. Executable retries/leases are recorded in background_jobs and background_job_attempts.
+Business-facing import state and counts. Each executable INGESTION work run is a separate background_jobs row linked to this stable job_id; its claims are recorded in background_job_attempts. Admin recovery creates a new audited work-run row under the same ingestion job.
 
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
@@ -340,7 +343,7 @@ Business-facing import state and counts. Executable retries/leases are recorded 
 
 Constraints: UNIQUE(preview_id, job_id) is an explicit alternate key for SQLite composite foreign keys; the single-column UNIQUE(preview_id) continues to enforce one job per preview. The referenced upload kind governs processing_mode: feedback imports require one of the two modes, while reference imports require NULL. A repeated confirmation with a different mode conflicts; the mode cannot be changed by a retry.
 
-Status/count transitions must be transactionally consistent with accepted source rows. QUEUED has null started_at/completed_at; RUNNING requires started_at and null completed_at; COMPLETED, PARTIAL, and FAILED require completed_at. When both are present, completed_at is not earlier than started_at. For PP-014, use one SQLite `BEGIN IMMEDIATE` transaction for the ingestion job, feedback rows, product placeholders, classification work item, and preview confirmation. Read and persist accepted rows in chunks of at most 500; perform identity/link lookups in groups of at most 250 rows (at most 500 source-identity bind values or 750 linkage bind values). Use executemany for product inserts so each SQLite statement stays below 999 bind variables. Do not commit between chunks; any failure rolls back all rows and queue state. Verify the artifact hash and stale-source identities while holding the writer transaction. This bounded single transaction preserves the all-or-nothing import and prevents a retry from duplicating source rows.
+Status/count transitions must be transactionally consistent with accepted source rows. QUEUED has null started_at/completed_at; RUNNING requires started_at and null completed_at; COMPLETED, PARTIAL, and FAILED require completed_at. When both are present, completed_at is not earlier than started_at. An Admin recovery does not reset a terminal run's claim count: it creates a new INGESTION background job with a distinct background_job_id/work_key, linked to the same ingestion_job_id, and records an append-only recovery audit event atomically. Derive the new run's stable work_key from the same ingestion_job_id and the retry command's Idempotency-Key so a replay of that command returns the same run and audit result. A replay is eligible only when the operation is safely replayable; source identities, idempotency, and the original processing_mode remain unchanged. For PP-014, use one SQLite `BEGIN IMMEDIATE` transaction for the ingestion job, feedback rows, product placeholders, classification work item, and preview confirmation. Read and persist accepted rows in chunks of at most 500; perform identity/link lookups in groups of at most 250 rows (at most 500 source-identity bind values or 750 linkage bind values). Use executemany for product inserts so each SQLite statement stays below 999 bind variables. Do not commit between chunks; any failure rolls back all rows and queue state. Verify the artifact hash and stale-source identities while holding the writer transaction. This bounded single transaction preserves the all-or-nothing import and prevents a retry from duplicating source rows.
 
 #### ingestion_conflicts
 
@@ -389,7 +392,7 @@ Append-only record of Admin/system linkage decisions. The current resolved colum
 | recompute_job_id | TEXT | Yes | None | FK to background_jobs.background_job_id for affected detection recomputation. |
 | created_at | TEXT | No | None | UTC reconciliation time. |
 
-Never invent identifiers. Reconciliation does not alter event time, source text, source identity, or original reported identifiers. Each accepted reconciliation is followed by recomputation of affected detection results; audit evidence remains append-only.
+Never invent identifiers. Reconciliation does not alter event time, source text, source identity, or original reported identifiers. Each accepted reconciliation queues historical recomputation of affected aggregates from persisted source facts using the exact validated product, supplier, batch, feedback, and logical-defect identifiers in the approved records. Keep unresolved feedback as LINKAGE_PENDING and never infer missing IDs. Recompute source-derived aggregates from facts rather than applying counter deltas. Leave coverage UNKNOWN unless explicit approved coverage evidence establishes it. This historical work is evidence-only: it does not create/update incidents, send notifications, or activate detection. Audit evidence remains append-only.
 
 ### 4.5 Taxonomy and classification
 
@@ -474,6 +477,10 @@ Each row is one processing attempt/outcome for a feedback record. Prior attempts
 
 Constraints: UNIQUE(feedback_id, attempt_number), UNIQUE(classification_id, taxonomy_version_id). `background_job_id` is non-null for every classification attempt and references the durable job created before provider submission. QUEUED has null started_at/completed_at; IN_PROGRESS has started_at and null completed_at; COMPLETED, RETRYABLE_FAILED, TERMINAL_FAILED, and NEEDS_REVIEW have completed_at. When both are present, completed_at is not earlier than started_at. COMPLETED requires has_defect and needs_review values plus a validated primary label; non-completed attempts must not be counted as confirmed classifications. The primary-label requirement is a cross-row invariant checked in the same service transaction that persists the result and its labels. COMPLETED represents definitive DEFECT or NO_DEFECT only; semantic uncertainty is stored as NEEDS_REVIEW, never as COMPLETED or NO_DEFECT. For Batch requests, `custom_id` is exactly the immutable `classification_id`; `UNIQUE(classification_id)` therefore provides the durable result correlation identity without an additional mapping table. A retry creates a new classification row, attempt_number, and classification_id; finalized prior attempts remain immutable. Model and prompt versions are recorded, not approved by this schema.
 
+**Approved attempt-selection contract (23 November 2026):** For each feedback record and applicable taxonomy version, select the latest qualifying classification with `status=COMPLETED`, `needs_review=0`, a definitive `has_defect`, and validated labels. Order by persisted fixed-precision UTC `completed_at DESC`, then unique `classification_id COLLATE BINARY DESC` for a timestamp tie. Failed, queued, in-progress, invalid/terminal-failed, and needs-review rows cannot replace a qualifying result. Attempts remain immutable and traceable. A source record contributes at most once within an applicable aggregation context; attempts are not additive.
+
+**Approved aggregation-version contract (24 November 2026):** Each classification-backed aggregation context has one explicitly supplied `taxonomy_version_id`. Persisted detection contexts store it in immutable detection-rule configuration, snapshot it on the durable job before claim, and persist/fingerprint it on detection results and evidence. Read-time dashboard/product requests supply exactly one ID and echo it in the response; these are query-time views and do not create durable aggregate rows. Any future materialized aggregate must persist the same ID. A context recomputation reuses its stored ID; a new persisted context requires an explicit assignment. Missing or invalid IDs fail closed and produce no aggregate result. Never fall back to another version or merge aggregate counts across versions. Records without a qualifying completed result for the applicable version are unclassified for that context; this includes records with qualifying results only under another version. No taxonomy change automatically reclassifies historical feedback.
+
 #### classification_labels
 
 One primary and optional secondary label per classification, with duplicate issue labels forbidden within the same attempt.
@@ -488,7 +495,7 @@ One primary and optional secondary label per classification, with duplicate issu
 | logical_defect_id | TEXT | Yes | None | Required with specific_issue_code; maps the versioned code to the stable semantic identity. Null for labels without a specific issue code. |
 | label_order | INTEGER | No | None | CHECK 0 for PRIMARY, 1 for SECONDARY; UNIQUE(classification_id, label_order). |
 
-Constraints: CHECK that specific_issue_code and logical_defect_id are either both null or both non-null. Composite FK (taxonomy_version_id, category_code) references taxonomy_categories; composite FK (taxonomy_version_id, category_code, specific_issue_code, logical_defect_id) references taxonomy_issue_codes. The category FK covers labels without a specific issue code. Composite FK (classification_id, taxonomy_version_id) references classifications and requires the label's taxonomy version to match its parent classification; UNIQUE(classification_id, taxonomy_version_id) on classifications supplies this SQLite parent key. Use a partial unique index on (classification_id, specific_issue_code) for non-null issue codes so one issue cannot be duplicated as both primary and secondary. Also declare UNIQUE(classification_id, label_role, logical_defect_id) for evidence references. The schema cannot prove evidence grounding; the backend validator must.
+Constraints: CHECK that specific_issue_code and logical_defect_id are either both null or both non-null. Composite FK (taxonomy_version_id, category_code) references taxonomy_categories; composite FK (taxonomy_version_id, category_code, specific_issue_code, logical_defect_id) references taxonomy_issue_codes. The category FK covers labels without a specific issue code. Composite FK (classification_id, taxonomy_version_id) references classifications and requires the label's taxonomy version to match its parent classification; UNIQUE(classification_id, taxonomy_version_id) on classifications supplies this SQLite parent key. Use a partial unique index on (classification_id, specific_issue_code) for non-null issue codes so one issue cannot be duplicated as both primary and secondary. Also declare UNIQUE(classification_id, label_role, logical_defect_id) and UNIQUE(classification_id, taxonomy_version_id, label_role, logical_defect_id) for evidence references. The schema cannot prove evidence grounding; the backend validator must.
 
 ### 4.6 Durable work, retries, and source coverage
 
@@ -500,11 +507,12 @@ A durable work item for ingestion execution, classification, historical Batch po
 |---|---|---:|---|---|
 | background_job_id | TEXT | No | None | Primary key. |
 | job_type | TEXT | No | None | CHECK: INGESTION, CLASSIFICATION, BATCH_POLL, DETECTION, RECONCILIATION. |
+| taxonomy_version_id | TEXT | Yes | None | FK to taxonomy_versions.taxonomy_version_id. Required and immutable for DETECTION work; null for other job types. Snapshots the applicable taxonomy version before the work is claimed. |
 | work_key | TEXT | No | None | UNIQUE stable deduplication key for this work identity. |
 | ingestion_job_id | TEXT | Yes | None | FK to ingestion_jobs.job_id when applicable. |
 | status | TEXT | No | QUEUED | CHECK: QUEUED, RUNNING, RETRY_WAIT, COMPLETED, PARTIAL, FAILED. |
 | attempt_count | INTEGER | No | 0 | Non-negative; increments for each claimed execution attempt. |
-| max_attempts | INTEGER | No | None | Positive retry-budget snapshot. For the `CLASSIFICATION` item created by PP-014 for a confirmed feedback import, persist 3 total claimed attempts (initial plus at most two additional attempts), per the 22 November 2026 OPS-02 clarification. Other job types retain their unresolved OPS-02 values. |
+| max_attempts | INTEGER | Yes | NULL | Positive total-claim budget snapshot, including the initial claim; NULL means the work type has no approved budget and is not eligible for worker claim or automatic replay. PP-014-created CLASSIFICATION, each INGESTION run, RECONCILIATION jobs, and M3 historical DETECTION jobs use 3. INGESTION recovery starts a new audited run under the same ingestion_job_id; it does not reset the previous run. BATCH_POLL remains unbudgeted. |
 | scheduled_at | TEXT | No | None | Earliest intended work time. |
 | next_attempt_at | TEXT | Yes | None | Retry eligibility time. |
 | worker_id | TEXT | Yes | None | Current claimant identity, if any. |
@@ -518,11 +526,13 @@ A durable work item for ingestion execution, classification, historical Batch po
 | started_at | TEXT | Yes | None | UTC first start. |
 | completed_at | TEXT | Yes | None | UTC terminal time. |
 
-Status/time rule: QUEUED and RETRY_WAIT have null completed_at and no active claim tuple; RUNNING requires started_at, worker_id, lease_token, and lease_expires_at with null completed_at; COMPLETED, PARTIAL, and FAILED require completed_at and no active claim tuple. next_attempt_at is set only for RETRY_WAIT. If both start and completion timestamps exist, completion is not earlier than start. The worker claims one item in a short `BEGIN IMMEDIATE` transaction, renews an active lease every 60 seconds in a separate short transaction conditioned on lease_token, including during provider calls, and rejects stale-owner writes. Provider calls occur outside SQLite transactions.
+Add a SQLite CHECK requiring `taxonomy_version_id IS NOT NULL` exactly when `job_type='DETECTION'`, and null for other job types. Declare `UNIQUE(background_job_id, taxonomy_version_id)` as the composite parent key used by detection_results. A DETECTION job's version is fixed before claim and cannot change on retry or replay.
 
-At worker startup and every 60 seconds while running, reconciliation finds expired claims, finalizes the active attempt as `ABANDONED`, and clears its lease. A work item without an approved `max_attempts` budget is not eligible for worker claim or automatic replay; keep it queued and visible for disposition without inventing a budget. Reconciliation schedules another attempt only when the result is known safe to retry and an approved budget exists, using the next eligible 5/15/45-second delay. An exhausted approved budget yields a terminal `FAILED` job. Provider submissions with uncertain outcomes must follow their owning correlation/reconciliation contract before resubmission.
+Status/time rule: QUEUED and RETRY_WAIT have null completed_at and no active claim tuple; RUNNING requires started_at, worker_id, lease_token, and lease_expires_at with null completed_at; COMPLETED, PARTIAL, and FAILED require completed_at and no active claim tuple. next_attempt_at is set only for RETRY_WAIT. If both start and completion timestamps exist, completion is not earlier than start. A DETECTION job must have a non-null taxonomy_version_id at creation; other job types must have it null. The value is immutable and must match the detection-rule version used by the job. The worker claims one item in a short `BEGIN IMMEDIATE` transaction, renews an active lease every 60 seconds in a separate short transaction conditioned on lease_token, including during provider calls, and rejects stale-owner writes. Provider calls occur outside SQLite transactions.
 
-For each confirmed feedback import with accepted rows, PP-014 creates one stable `CLASSIFICATION` work item linked to its `ingestion_job_id`, with `status=QUEUED`, `attempt_count=0`, and `max_attempts=3` total claims, including the initial attempt. Its stable `work_key` derives from the ingestion job identity. Queue creation is atomic with the accepted feedback rows and ingestion job. No execution-attempt row is created until a worker claims the item. PP-014 does not implement claiming, retry execution, backoff, leases, recovery, or provider calls. PP-007 approves retry delays of 5, 15, then 45 seconds; this classification item can use only the first two delays. Other job-type attempt budgets are not assigned a default and remain a prerequisite for their processing implementations.
+At worker startup and every 60 seconds while running, reconciliation finds expired claims, finalizes the active attempt as `ABANDONED`, and clears its lease. A work item with NULL `max_attempts` is not eligible for worker claim or automatic replay; keep it queued and visible for disposition without inventing a budget. For INGESTION, each work run has 3 total claims; only safely replayable work is eligible for another claim, and an Admin recovery creates a new audited run under the same ingestion job. RECONCILIATION and historical DETECTION each have a 3-claim total budget per job type and retry only known-safe transient failures. The PP-014-created CLASSIFICATION item retains its separate 3-claim budget. Eligible retries use the next PP-007 5/15/45-second delay; exhausted approved budgets yield a terminal `FAILED` job. Provider submissions with uncertain outcomes must follow their owning correlation/reconciliation contract before resubmission.
+
+For each confirmed feedback import with accepted rows, PP-014 creates one stable `CLASSIFICATION` work item linked to its `ingestion_job_id`, with `status=QUEUED`, `attempt_count=0`, and `max_attempts=3` total claims, including the initial attempt. Its stable `work_key` derives from the ingestion job identity. Queue creation is atomic with the accepted feedback rows and ingestion job. No execution-attempt row is created until a worker claims the item. PP-014 does not implement claiming, retry execution, backoff, leases, recovery, or provider calls. PP-007 approves retry delays of 5, 15, then 45 seconds; this classification item can use only the first two delays. INGESTION, RECONCILIATION, and historical DETECTION use the separately approved 3-claim budgets; BATCH_POLL remains unbudgeted.
 
 Batch persistence rule: create one durable `BATCH_POLL` job per provider input file. If one import is split across input files, each job references the same `ingestion_job_id` and owns its own provider input-file ID and Batch ID. Persist all classification rows assigned to that job, each linked by non-null `background_job_id`, before uploading/submitting provider work. The Files API ID is stored before Batch creation; the Batch create request carries the stable ProductPulse `background_job_id` in metadata. If the create response is ambiguous, recovery lists/paginates provider Batches and matches both metadata job ID and `provider_input_file_id` before considering resubmission. If multiple batches match after an uncertain retry, the earliest `created_at` then lexicographically smallest Batch ID is canonical; best-effort cancel later duplicates and ignore their outputs. These service-level recovery rules require no SQLite-specific JSON or array column.
 
@@ -570,7 +580,7 @@ Overlapping intervals are retained as separate declarations. How they combine in
 
 #### defect_clusters
 
-Stable incident-capable batch-specific issue identity across taxonomy versions that explicitly map to the same `logical_defect_id`. Product-level analytics for LINKAGE_PENDING records are derived from feedback/classification rows and do not create product-only cluster or incident rows. The cluster stores no taxonomy-version code or category; those remain on each classification label and its evidence.
+Stable incident-capable batch-specific issue identity across taxonomy versions that explicitly map to the same `logical_defect_id`. This semantic cluster identity does not merge taxonomy-version-scoped aggregate counts: each detection result stores and fingerprints one applicable taxonomy version. Product-level analytics for LINKAGE_PENDING records are derived from feedback/classification rows and do not create product-only cluster or incident rows. The cluster stores no taxonomy-version code or category; those remain on each classification label and its evidence.
 
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
@@ -590,6 +600,7 @@ Immutable versioned deterministic rule configuration. Pending threshold values a
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
 | rule_version | TEXT | No | None | Primary key; immutable identifier. |
+| taxonomy_version_id | TEXT | No | None | FK to taxonomy_versions.taxonomy_version_id; the explicit taxonomy version for aggregation contexts created under this rule. Immutable with the rule. |
 | state | TEXT | No | None | CHECK: DRAFT, ACTIVE, RETIRED. |
 | config_text | TEXT | No | None | Canonical configuration snapshot, including configured thresholds and rule parameters. |
 | created_by | TEXT | No | None | FK to users.user_id. |
@@ -597,11 +608,13 @@ Immutable versioned deterministic rule configuration. Pending threshold values a
 | activated_at | TEXT | Yes | None | UTC activation time. |
 | retired_at | TEXT | Yes | None | UTC retirement time. |
 
-At most one active rule version should be enforced with a partial unique index. DRAFT requires activated_at/retired_at null; ACTIVE requires activated_at non-null and retired_at null; RETIRED requires both timestamps, with retired_at not earlier than activated_at. Calibration determines whether any version is eligible for automatic incident creation.
+At most one active rule version should be enforced with a partial unique index. DRAFT requires activated_at/retired_at null; ACTIVE requires activated_at non-null and retired_at null; RETIRED requires both timestamps, with retired_at not earlier than activated_at. The Admin must explicitly supply the taxonomy_version_id when creating a rule draft; there is no implicit current/latest-version default. Calibration determines whether any version is eligible for automatic incident creation.
+
+Declare `UNIQUE(rule_version, taxonomy_version_id)` as a composite parent key so result rows can enforce the rule/version match.
 
 #### detection_results
 
-One deterministic evaluation of a cluster/window. Insufficient required baseline coverage is persisted for visibility, with no incident and no automatic warning event. The immutable input snapshot permits reproduction of the result fingerprint, including classification states that are not counted as defect evidence. Historical recomputations are retained but cannot be applied to incident/notification state.
+One deterministic evaluation context for a cluster/window and exactly one taxonomy version. Insufficient required baseline coverage is persisted for visibility, with no incident and no automatic warning event. The immutable input snapshot permits reproduction of the result fingerprint, including the applicable taxonomy version and classification states that are not counted as defect evidence. Historical recomputations are retained with their taxonomy version and cannot be applied to incident/notification state. Linkage-triggered historical recomputation rebuilds affected aggregates from source facts using exact approved identifiers and the version already recorded for the context; it leaves unknown coverage UNKNOWN and never changes incidents, sends notifications, or activates detection.
 
 | Column | SQLite type | Null | Default | Key / constraints / meaning |
 |---|---|---:|---|---|
@@ -609,6 +622,7 @@ One deterministic evaluation of a cluster/window. Insufficient required baseline
 | result_key | TEXT | No | None | UNIQUE SHA-256 idempotency key for the exact canonical result_input_snapshot_text. |
 | result_input_snapshot_text | TEXT | No | None | Canonical JSON snapshot of fingerprint inputs, including the immutable coverage-policy configuration/version; metadata/IDs/states only, never source text or other free text. Immutable after insert. |
 | cluster_id | TEXT | No | None | FK to defect_clusters.cluster_id. |
+| taxonomy_version_id | TEXT | No | None | FK to taxonomy_versions.taxonomy_version_id; must match the immutable rule configuration and DETECTION job snapshot. Included in result_input_snapshot_text and result_key. |
 | background_job_id | TEXT | Yes | None | FK to background_jobs.background_job_id. |
 | rule_version | TEXT | No | None | FK to detection_rule_versions.rule_version. |
 | coverage_policy_version | TEXT | No | None | Immutable identifier for the coverage assessment policy included in the result fingerprint. |
@@ -635,7 +649,9 @@ One deterministic evaluation of a cluster/window. Insufficient required baseline
 | incident_application_state | TEXT | No | None | CHECK: NOT_APPLICABLE, PENDING, APPLIED, SUPERSEDED. PENDING only for a qualifying current result; APPLIED is written atomically with incident/audit/outbox changes; SUPERSEDED means the input snapshot changed before application. |
 | created_at | TEXT | No | None | UTC persistence time. |
 
-Constraint: UNIQUE(detection_result_id, cluster_id) supplies the composite parent key used by detection_evidence.
+Unclassified observed/baseline counts are derived as the corresponding assessed count minus complete count. A source record with no qualifying COMPLETED classification for this result's taxonomy_version_id—including a record classified only under another version—is unclassified for that context. A validated definitive NO_DEFECT counts as classified, not unclassified. The canonical result snapshot retains the source-record IDs and version-specific classification states needed to reproduce these counts.
+
+Constraints: `UNIQUE(detection_result_id, cluster_id, taxonomy_version_id)` supplies the composite parent key used by detection_evidence; `FOREIGN KEY (rule_version, taxonomy_version_id)` references detection_rule_versions; when background_job_id is present, `FOREIGN KEY (background_job_id, taxonomy_version_id)` references background_jobs. Declare `UNIQUE(background_job_id, taxonomy_version_id)` on background_jobs as the corresponding composite parent key. The durable-work service requires each persisted DETECTION result to originate from a DETECTION job carrying the same version. The result_key fingerprints the exact applicable taxonomy version so results from separate versions cannot collapse to one historical aggregate.
 
 Checks: all counts are non-negative; complete classification counts do not exceed their assessed counts; each interval end is later than its start; INSUFFICIENT requires INSUFFICIENT_COVERAGE, null severity/ratio, and NOT_APPLICABLE application state; SUFFICIENT_ZERO requires zero baseline and null ratio; SUFFICIENT_NONZERO requires a positive baseline and may store a ratio. NO_TRIGGER requires null severity and NOT_APPLICABLE. HISTORICAL_RECOMPUTE always requires NOT_APPLICABLE. A qualifying CURRENT_MONITORING result is inserted as PENDING and can transition only to APPLIED or SUPERSEDED. A result marked INSUFFICIENT_COVERAGE must never be linked to an automatically created incident or automatic outbox event. Exact window and coverage-policy values remain under DAI-06/PB-01.
 
@@ -649,11 +665,12 @@ Normalized trace from a result to the exact classified labels and source records
 | cluster_id | TEXT | No | None | Cluster evaluated by the parent detection result; composite FK. |
 | feedback_id | TEXT | No | None | FK to feedback; part of distinctness constraint. |
 | classification_id | TEXT | No | None | FK to classifications. |
+| taxonomy_version_id | TEXT | No | None | Must match both detection_results.taxonomy_version_id and classifications.taxonomy_version_id for the referenced label. |
 | label_role | TEXT | No | None | PRIMARY or SECONDARY; completes FK to classification_labels. |
 | logical_defect_id | TEXT | No | None | Stable identity on the counted classification label; must match the cluster. |
 | evidence_period | TEXT | No | None | CHECK: OBSERVED, BASELINE; part of composite primary key. |
 
-Constraints: UNIQUE(detection_result_id, feedback_id, evidence_period); composite FK (detection_result_id, cluster_id) to detection_results; composite FK (cluster_id, logical_defect_id) to defect_clusters; composite FK (classification_id, label_role, logical_defect_id) to classification_labels. These SQLite-compatible keys ensure the cited label has the same stable defect identity as the evaluated cluster. Application validates that the classification is the applicable completed result and that its feedback_id equals the evidence feedback_id.
+Constraints: UNIQUE(detection_result_id, feedback_id, evidence_period); composite FK (detection_result_id, cluster_id, taxonomy_version_id) to detection_results; composite FK (cluster_id, logical_defect_id) to defect_clusters; composite FK (classification_id, taxonomy_version_id, label_role, logical_defect_id) to classification_labels. Add the corresponding unique parent keys to detection_results and classification_labels. These SQLite-compatible keys ensure evidence uses the exact version selected for its result and the same stable defect identity as the evaluated cluster. Application validates that the classification is the latest qualifying completed result for that version and that its feedback_id equals the evidence feedback_id. Unclassified source records remain in the result input snapshot and unclassified counts; they do not create detection_evidence rows.
 
 #### detection_result_coverage
 
@@ -939,7 +956,7 @@ Partial indexes are supported by SQLite, but the minimum SQLite runtime version 
 - Detection-result application state is part of that same transaction. A current qualifying result is first durably stored as PENDING; if application fails, the local transaction rolls back and the result remains PENDING for recovery. An existing result_key must not short-circuit this recovery. Before applying a PENDING result, compare its stored fingerprint with the current canonical input snapshot for the same T/rule/policy. If inputs changed, mark it SUPERSEDED and ensure recomputation of the latest snapshot is durably queued; do not apply stale incident/outbox effects. Set APPLIED only with incident/audit/outbox effects committed; a retry checks the stable incident event key and outbox identity before inserting effects again. Historical and non-trigger/insufficient results are NOT_APPLICABLE.
 - The notification worker must account for a provider call whose result becomes uncertain after the request leaves the process. Expired SENDING with a still-QUEUED attempt returns to QUEUED; an abandoned IN_PROGRESS attempt becomes OUTCOME_UNKNOWN and is not automatically resent absent provider verification or an approved policy.
 - Use SQLite-compatible foreign keys, CHECK/UNIQUE constraints, and partial indexes. Do not assume PostgreSQL JSONB, advisory locks, SKIP LOCKED, or a network database.
-- Reconcile at worker startup and every 60 seconds while running. Use the PP-007 retry-delay sequence of 5, 15, then 45 seconds only for eligible known transient failures and only within an approved per-work-type attempt budget. PP-014-created `CLASSIFICATION` work items retain `max_attempts=3` total. No other work-type attempt default is approved; provider-specific notification retry limits remain pending under PP-008.
+- Reconcile at worker startup and every 60 seconds while running. Use PP-007's 5/15/45-second delay sequence only for eligible retries within an approved budget. PP-014-created `CLASSIFICATION` and each `INGESTION` run have 3 total claims; `RECONCILIATION` and historical `DETECTION` jobs have 3 total claims per job type. INGESTION recovery creates a new audited run under its existing ingestion job and requires safe replayability; RECONCILIATION and historical DETECTION retry only known-safe transient failures. A NULL budget remains unclaimable; `BATCH_POLL` remains unbudgeted. Provider-specific notification retry limits remain pending under PP-008.
 - OPS-06 approves uploaded CSV and generated rejection-report bytes in a protected persistent local filesystem directory accessible to the API and worker, outside public/static delivery and excluded from Git. SQLite stores only opaque IDs and metadata for these artifacts, not their file contents as BLOBs. The backend resolves IDs under the configured storage root and never accepts a path from a client. Follow the publication/DB-reference/orphan-reconciliation invariant in §5.1.
 
 ## 8. Retention, backup, and migrations
@@ -988,10 +1005,11 @@ These are carried forward, not approved by this document.
 | ARC-03 data access and migration tools | Approved: SQLAlchemy 2.x and Alembic 1.x for SQLite and versioned migrations | This document remains tool-neutral; use the approved tooling without changing the schema contracts or SQLite-only design. |
 | ARC-03/ARC-04 busy timeout and contention behavior | PP-007 approved | Use a 5-second busy timeout and up to 2 additional `SQLITE_BUSY` retries after rollback, with short transactions and no retry of non-idempotent side effects. |
 | ARC-04 leases, stale claims, worker recovery | PP-007 approved; notification uncertain-outcome recovery specified | Claim one item at a time with a 5-minute lease renewed every 60 seconds, including during provider calls; poll every 5 seconds, reconcile at startup and every 60 seconds, and reject stale-owner writes. Notification `OUTCOME_UNKNOWN` reconciliation follows ALERT_SPEC.md. |
-| OPS-02 retries and reconciliation | PP-007 approved with per-type budgets preserved | Use 5/15/45-second delays for eligible retries. `max_attempts=3` remains scoped to PP-014-created classification work. Other job-type budgets are not defaulted; notification-specific limits remain under PP-008. |
+| OPS-02 retries and reconciliation | Approved, with M3 budgets clarified 23 November 2026 | Use 5/15/45-second delays for eligible retries. `max_attempts=3` remains scoped to PP-014-created classification work; it also applies per INGESTION run and per RECONCILIATION or historical DETECTION job. `BATCH_POLL` remains unbudgeted; notification-specific limits remain under PP-008. |
 | OPS-03 retention and backup | Development policy approved; deployment-specific parameters deferred | Retain synthetic artifacts through the capstone period without automatic per-artifact expiry. Back up before every migration and reset/reseed using a quiesced SQLite backup plus referenced artifacts. Deployment-specific periodic cadence and backup retention remain open. |
 | DAI-05 model identifier and final classification contract | Selection method Approved; model ID/schema details open | Store actual model, prompt, and schema versions per attempt; no model is selected. |
 | DAI-04 taxonomy changes/reclassification and cross-version identity | Approved | Preserve the taxonomy version on each attempt; group only explicitly equivalent issue meanings by stable logical_defect_id. Changed meanings use a new ID; no automatic merge or blanket historical reclassification is implied. |
+| PP-005 classification-attempt authority and aggregation applicability | Within-version attempt selection approved 23 November 2026; one explicit taxonomy version per aggregation context approved 24 November 2026; initial taxonomy seed and other_product_defect issue-code policy remain open | Do not count attempts additively. Persist the selected version on each aggregate context; no fallback or cross-version count merge. |
 | SEC-01/02 session settings/account recovery/email identity | Approved 22 November 2026 | users and sessions store canonical email identity, Argon2id hash, forced-change state, absolute expiry, idle activity, and revocation; Security/API specify cookie and CSRF controls. |
 | ARC-05 recipient directory, route/fallback details, email sink | Sandbox/local adapter boundary Approved; concrete details open | Recipient groups/rules and exact snapshots are represented; route precedence, fallback and provider remain for ALERT_SPEC.md. |
 | PB-04 notification edge cases | Fixed 86,400-second cooldown per incident/severity across all routes, escalation bypass, and SYSTEM_DECISION suppression audit Approved; timestamp anchor and re-crossing/severity-decrease/recurrence details remain open | Persist event kind, rule version, incident, severity, and suppression decision; do not encode unapproved edge behavior. |
@@ -1008,9 +1026,9 @@ The prior v1.1 model was checked against earlier PRD/register/spec revisions. In
 
 ### Data-model review status
 
-The prior Approved v1.1 baseline had no identified structural blocker. v1.5.2 includes the approved authentication/account fields, parser/preview/conflict contracts, and PP-007 operational policy while preserving calibration and deployment-specific dependencies. DAI-08 and ARC-08 remain Approved. PB-06 continues to bound unresolved-link handling. Deployment-specific periodic backup cadence and backup retention remain open under OPS-03.
+The prior Approved v1.1 baseline had no identified structural blocker. v1.5.5 includes the approved authentication/account fields, parser/preview/conflict contracts, PP-007 operational policy, 23 November M3 retry/linkage-recomputation and attempt-selection clarifications, and the 24 November explicit taxonomy-version applicability contract. DAI-08 and ARC-08 remain Approved. PB-06 continues to bound unresolved-link handling. Deployment-specific periodic backup cadence and backup retention remain open under OPS-03.
 
-Other downstream dependencies remain open: coverage scope/completeness parameters and PB-01 thresholds remain Pending Calibration; other job-type retry budgets, provider-specific notification retry limits, provider verification support for uncertain outcomes, deployment-specific periodic backup cadence/retention, and SQLite runtime verification before deployment remain for their owning specifications.
+Other downstream dependencies remain open: PP-005's initial taxonomy seed and other_product_defect issue-code policy; coverage scope/completeness parameters and PB-01 thresholds remain Pending Calibration; the BATCH_POLL budget, provider-specific notification retry limits, provider verification support for uncertain outcomes, deployment-specific periodic backup cadence/retention, and SQLite runtime verification before deployment remain for their owning specifications. The within-version authoritative-attempt and explicit per-context taxonomy-version rules are approved; the initial seed and issue-code policy remain gated.
 
-Version 1.5.1 was the previous approved conditional baseline; v1.5.2 is the current conditional Approved — Design Baseline with PP-014's `max_attempts=3` queue snapshot and the PP-007 operational policies recorded above. Other pending calibration and deployment-specific operational decisions remain unchanged.
+Version 1.5.4 was the previous approved conditional baseline; v1.5.5 is the current conditional Approved — Design Baseline with PP-014's unchanged `CLASSIFICATION max_attempts=3` snapshot, the 23 November INGESTION/RECONCILIATION/historical DETECTION retry budgets, the linkage-triggered historical recomputation boundary, the approved within-version selection rule, and the explicit aggregation taxonomy-version fields and semantics approved 24 November. Other pending calibration and deployment-specific operational decisions remain unchanged.
 

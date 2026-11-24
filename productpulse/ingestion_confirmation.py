@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from productpulse.api_common import ApiError, validate_idempotency_key
+from productpulse.api_common import safe_audit
 from productpulse.api_schemas import (
     ConfirmPreviewRequest,
     IngestionJobCounts,
@@ -20,6 +21,7 @@ from productpulse.api_schemas import (
 )
 from productpulse.auth_api import AuthContext, _check_session_csrf, get_admin_context
 from productpulse.ingestion.artifacts import ArtifactIntegrityError, ArtifactStore
+from productpulse.ingestion.reference_imports import REFERENCE_KINDS, assert_reference_preview_current, persist_reference_rows
 from productpulse.models import (
     BackgroundJob, Batch, CsvUpload, Feedback, IngestionJob, Product, Supplier, UploadPreview, UploadPreviewRow,
 )
@@ -312,9 +314,9 @@ def confirm_ingestion_preview(
     if not is_feedback and mode_supplied:
         db.rollback()
         raise ApiError(422, "PROCESSING_MODE_NOT_ALLOWED", "Reference imports do not use a feedback processing mode.", "Validation failed")
-    if not is_feedback:
+    if not is_feedback and upload.upload_kind not in REFERENCE_KINDS:
         db.rollback()
-        raise ApiError(422, "REFERENCE_CONFIRMATION_OUT_OF_SCOPE", "This milestone confirms feedback imports only.", "Validation failed")
+        raise ApiError(422, "REFERENCE_CONFIRMATION_UNSUPPORTED", "This reference import type is not supported.", "Validation failed")
     if body.verified_sha256 != preview.verified_sha256 or body.verified_sha256 != upload.file_sha256:
         db.rollback()
         raise ApiError(409, "PREVIEW_HASH_MISMATCH", "The supplied hash does not match the immutable preview.", "Conflict")
@@ -343,7 +345,8 @@ def confirm_ingestion_preview(
         if keyed_job is not None:
             if keyed_job.preview_id != preview_id or keyed_job.processing_mode != body.processing_mode:
                 raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The Idempotency-Key was already used for a different confirmation.", "Conflict")
-            _assert_classification_queue_exists(db, keyed_job)
+            if is_feedback:
+                _assert_classification_queue_exists(db, keyed_job)
             db.commit()
             return _api_job(keyed_job)
 
@@ -351,14 +354,23 @@ def confirm_ingestion_preview(
         if existing_job is not None:
             if existing_job.processing_mode != body.processing_mode:
                 raise ApiError(409, "PROCESSING_MODE_CONFLICT", "This preview was already confirmed with a different processing mode.", "Conflict")
-            _assert_classification_queue_exists(db, existing_job)
+            if is_feedback:
+                _assert_classification_queue_exists(db, existing_job)
             db.commit()
             return _api_job(existing_job)
 
         if preview.state != "READY" or preview.accepted_row_count < 1:
             raise ApiError(409, "PREVIEW_NOT_CONFIRMABLE", "Only a READY preview with eligible feedback rows can be confirmed.", "Conflict")
         _assert_preview_counts(db, preview)
-        _assert_no_stale_source_rows(db, preview_id, preview.accepted_row_count)
+        if is_feedback:
+            _assert_no_stale_source_rows(db, preview_id, preview.accepted_row_count)
+        elif not assert_reference_preview_current(db, upload.upload_kind, preview_id):
+            raise ApiError(
+                409,
+                "PREVIEW_STALE",
+                "Reference mappings changed after this preview. Create a fresh preview and review its outcomes.",
+                "Conflict",
+            )
 
         now = utc_text()
         job = IngestionJob(
@@ -366,7 +378,7 @@ def confirm_ingestion_preview(
             preview_id=preview_id,
             idempotency_key=key,
             processing_mode=body.processing_mode,
-            status="QUEUED",
+            status="QUEUED" if is_feedback else "RUNNING",
             total_row_count=preview.total_row_count,
             accepted_row_count=preview.accepted_row_count,
             rejected_row_count=preview.rejected_row_count,
@@ -374,17 +386,33 @@ def confirm_ingestion_preview(
             conflict_row_count=preview.conflict_row_count,
             persisted_feedback_count=0,
             created_at=now,
-            started_at=None,
+            started_at=None if is_feedback else now,
             completed_at=None,
             last_error_code=None,
         )
         db.add(job)
         db.flush()
-        persisted = _persist_feedback_chunks(db, preview, upload, job, now)
-        if persisted != preview.accepted_row_count:
-            raise ApiError(503, "IMPORT_COUNT_MISMATCH", "The preview rows could not be imported consistently.", "Request failed")
-        job.persisted_feedback_count = persisted
-        _create_classification_queue_item(db, job, now)
+        if is_feedback:
+            persisted = _persist_feedback_chunks(db, preview, upload, job, now)
+            if persisted != preview.accepted_row_count:
+                raise ApiError(503, "IMPORT_COUNT_MISMATCH", "The preview rows could not be imported consistently.", "Request failed")
+            job.persisted_feedback_count = persisted
+            _create_classification_queue_item(db, job, now)
+        else:
+            imported = persist_reference_rows(db, preview, upload, now)
+            if imported != preview.accepted_row_count:
+                raise ApiError(503, "IMPORT_COUNT_MISMATCH", "The reference rows could not be imported consistently.", "Request failed")
+            job.status = "COMPLETED"
+            job.completed_at = now
+            safe_audit(
+                db,
+                action="REFERENCE_IMPORT_CONFIRMED",
+                resource_type="INGESTION_JOB",
+                resource_id=job.job_id,
+                actor_user_id=context.user.user_id,
+                after={"upload_kind": upload.upload_kind, "preview_id": preview_id, "accepted_rows": imported},
+                request_id_value=getattr(context.request.state, "request_id", None),
+            )
         db.execute(
             update(UploadPreview)
             .where(UploadPreview.preview_id == preview_id)

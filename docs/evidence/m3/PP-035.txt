@@ -1,0 +1,41 @@
+ProductPulse M3 acceptance evidence — PP-035
+Date: 24 November 2026
+Outcome: Done
+
+Authorization and readiness
+- Product Owner approved Milestone M3 for PP-018, PP-034, PP-035, PP-015, and PP-036 in that order.
+- Start-time recheck passed immediately before implementation: PP-012, PP-014, PP-007, and PP-018 are Done with retained evidence. OPS-02 is resolved. PP-018 worker retry rules and its safe-replay result marker passed their checks. PP-034 is Done.
+- Governing contracts reviewed: PRD v1.7; API_SPEC.yaml v1.5.4; DATA_MODEL.md v1.5.5; UI_SPEC.md v0.4.3; Security v1.1; OPS-02; PP-007; PP-014; PP-018; Definition of Done.
+- The preserved Redocly CLI validation evidence remains successful with exit code 0. Its recorded API_SPEC.yaml SHA-256 `DE385D88904D03F252300122DFB11A21A1FC77290413A48EC6D7CACF4F348A46` matches the current file. No approved specification or requirement was changed.
+
+Acceptance criteria mapping and results
+- C1-C2 / AC04, AC16: Admin-only GET list and detail endpoints return paged status, counts, timestamps, safe error code, report link, and server-derived eligibility. Status and list filters use the latest linked INGESTION run. Tests verify list/status/upload-kind filters and do not return persisted raw feedback or the seeded unsafe summary.
+- C1-C2 / recovery: The POST route rechecks the latest terminal run under SQLite `BEGIN IMMEDIATE`. It accepts only the PP-018 server-generated safe-replay summary on the exhausted 3-claim run. Permanent, unknown, abandoned, inconsistent, active, and missing runs fail closed. Success creates one new INGESTION run under the same stable `ingestion_job_id` with `max_attempts=3`, preserves the original preview, import idempotency key, processing mode, and feedback source identities, and appends one audit event in the same transaction.
+- C1-C2 / authorization and integrity: Tests cover unauthenticated, Business User, and missing-CSRF denials with no run or audit side effects. A fault-injection test proves an audit write failure rolls back the new run and job state together. Repeated use of the same idempotency key returns the same run and does not append another audit event; a changed key after eligibility changes receives the current `WORK_IN_PROGRESS` reason.
+- C1-C2 / UI: Admin ingestion status shows upload kind, mode, status, persisted counts, creation time, safe error code, eligibility reason, and available rejection-report link. The Retry control appears only when the server says eligible. Vitest verifies recovery submission, CSRF/idempotency headers, displayed new run ID, ineligible control removal, and refresh/display of a 409 reason. Business Users do not receive the Admin ingestion panel.
+- C3-C4: Backend/API, frontend, security, dependency, and build checks below passed. The only manual-only requirement is absence; all applicable authorization, recovery, and UI behavior is automated.
+
+Commands and results
+- `.tools/bin/uv.exe run --locked pytest -q tests/test_ingestion_retries.py` — 8 passed; one existing Starlette TestClient/httpx deprecation warning.
+- `.tools/bin/uv.exe run --locked pytest -q` — 96 passed; one existing Starlette TestClient/httpx deprecation warning.
+- `npm.cmd test -- --run` — 4 passed.
+- `npm.cmd run build` — TypeScript and Vite build passed. Existing bundle-size advisory: output chunk is approximately 512 kB after minification.
+- `.tools/bin/uv.exe run --locked python -m bandit -r productpulse` — passed; no issues identified across 4,371 lines.
+- `.tools/bin/uv.exe run --locked python -m pip_audit` — passed; no known vulnerabilities found.
+- `npm.cmd audit --audit-level=moderate` — passed; zero vulnerabilities found.
+- `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/source-fingerprint.ps1` — source snapshot SHA-256 `6bf71a0d113fbf5b78b1ddd017ae1f958a7e507054b178fd22ea22f99cf8ff21` (125 files).
+- One early focused run exposed a test-fixture-only `DetachedInstanceError`; the test now retains the run ID before closing its session and the final focused and full suites pass.
+
+Review and security/data-integrity findings
+- Recovery checks, creation of the new job, update of the stable job status, and append-only audit event share one immediate SQLite transaction. Unique `work_key` and the transaction serialize repeated and concurrent recovery commands.
+- Eligibility trusts only the worker's fixed replay-safe summary on the final terminal attempt. An unknown or changed marker fails closed. Raw error summary text is not exposed in the ingestion response; only the stable safe error code is returned.
+- The recovery route does not rewrite feedback rows. Tests compare feedback IDs, source types, source record IDs, and payload hashes before and after recovery.
+- Backend role checks and CSRF remain enforced. No OpenAI/provider call, detection activation, incident mutation, or notification behavior was added. No migration or dependency change was made.
+- No unresolved PP-035 acceptance finding remains.
+
+Remaining risks and limitations
+- PP-018 intentionally provides worker mechanics without registering an INGESTION handler. The current CSV confirmation flow persists accepted rows synchronously; normal confirmations do not currently create a terminal INGESTION run. The recovery UI therefore remains hidden until a terminal INGESTION run exists. This ticket implements the approved Admin recovery API/UI over such runs; no handler or alternate run-creation behavior was added outside scope.
+- The API's safe-replay eligibility depends on the stable worker-generated summary string. A future change to that summary will fail closed and must update the aligned implementation and tests.
+- Application database migrations remain subject to the approved quiescence and coherent database/artifact backup hold point.
+
+No commit, push, merge, or deployment was performed.

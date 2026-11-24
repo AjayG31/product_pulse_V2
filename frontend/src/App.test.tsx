@@ -63,10 +63,36 @@ describe("authentication flows", () => {
   it("shows Admin templates and maps columns before creating a safe preview", async () => {
     const user = userEvent.setup();
     const calls: Array<{ url: string; init?: RequestInit }> = [];
+    let recovered = false;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       calls.push({ url, init });
       if (url === "/auth/session") return response(200, { user: adminUser, csrf_token: "admin-session-csrf" });
+      if (url === "/admin/ingestion/jobs?page=1&page_size=50") {
+        return response(200, {
+          items: [{
+            job_id: "ing_retry",
+            preview_id: "prv_retry",
+            status: recovered ? "QUEUED" : "FAILED",
+            processing_mode: "INCREMENTAL_RESPONSES",
+            created_at: "2026-11-24T10:00:00.000Z",
+            counts: { total_rows: 1, accepted_rows: 1, rejected_rows: 0, persisted_feedback: 1 },
+            retry_eligibility: recovered
+              ? { eligible: false, reason_code: "WORK_IN_PROGRESS" }
+              : { eligible: true, reason_code: "ELIGIBLE" },
+            last_error_code: recovered ? null : "INGESTION_REPLAY_SAFE",
+            rejection_report: { available: true, href: "/admin/ingestion/previews/prv_retry/rejection-report" },
+          }],
+          page: { page: 1, page_size: 50, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/admin/ingestion/jobs/ing_retry/retry") {
+        recovered = true;
+        return response(202, { run: { background_job_id: "bgj_recovery_01" } });
+      }
+      if (url === "/admin/ingestion/previews/prv_retry") {
+        return response(200, { upload_kind: "REVIEWS" });
+      }
       if (url === "/admin/ingestion/previews") {
         return response(201, {
           preview_id: "prv_01",
@@ -76,7 +102,12 @@ describe("authentication flows", () => {
           verified_sha256: "a".repeat(64),
           parser_contract_version: "reviews-v1",
           state: "READY",
-          counts: { total_rows: 1, accepted_rows: 1, rejected_rows: 0, duplicate_noop_rows: 0, conflict_rows: 0 },
+          counts: { total_rows: 2, accepted_rows: 1, rejected_rows: 1, duplicate_noop_rows: 0, conflict_rows: 0 },
+          rejection_report: {
+            available: true,
+            href: "/admin/ingestion/previews/prv_01/rejection-report",
+            content_type: "text/csv",
+          },
         });
       }
       if (url === "/admin/ingestion/previews/prv_01/rows?page=1&page_size=50") {
@@ -95,6 +126,14 @@ describe("authentication flows", () => {
 
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Admin CSV upload and preview" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Ingestion job status" })).toBeVisible();
+    expect(screen.getByText("INGESTION_REPLAY_SAFE")).toBeVisible();
+    expect(screen.getByText("REVIEWS")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Report" })).toHaveAttribute(
+      "href",
+      "/admin/ingestion/previews/prv_retry/rejection-report",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Download Reviews template" })).toHaveAttribute("href", "/admin/ingestion/templates/REVIEWS");
     const csv = new File([
       "review_id,product_id,supplier_id,batch_id,review_timestamp,review_text\r\nr1,p1,,,2026-11-20T09:10:11Z,good product\r\n",
@@ -111,6 +150,10 @@ describe("authentication flows", () => {
 
     expect(await screen.findByRole("heading", { name: "Preview prv_01" })).toBeVisible();
     expect(screen.getByText(/State: READY/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Download rejection report" })).toHaveAttribute(
+      "href",
+      "/admin/ingestion/previews/prv_01/rejection-report",
+    );
     expect(screen.getByText("r1")).toBeVisible();
     const uploadCall = calls.find((call) => call.url === "/admin/ingestion/previews");
     expect(uploadCall?.init?.credentials).toBe("include");
@@ -142,6 +185,58 @@ describe("authentication flows", () => {
       verified_sha256: "a".repeat(64),
       processing_mode: "HISTORICAL_BATCH",
     });
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Recovery queued as run bgj_recovery_01.");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    const retryCall = calls.find((call) => call.url === "/admin/ingestion/jobs/ing_retry/retry");
+    expect(retryCall?.init?.method).toBe("POST");
+    expect(new Headers(retryCall?.init?.headers).get("X-CSRF-Token")).toBe("admin-session-csrf");
+    expect(new Headers(retryCall?.init?.headers).get("Idempotency-Key")).toBeTruthy();
+  });
+
+  it("refreshes retry eligibility and shows the server reason after a conflict", async () => {
+    const user = userEvent.setup();
+    let listCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/auth/session") return response(200, { user: adminUser, csrf_token: "admin-session-csrf" });
+      if (url === "/admin/ingestion/jobs?page=1&page_size=50") {
+        listCalls += 1;
+        return response(200, {
+          items: [{
+            job_id: "ing_race",
+            preview_id: "prv_race",
+            status: listCalls === 1 ? "FAILED" : "QUEUED",
+            processing_mode: "HISTORICAL_BATCH",
+            created_at: "2026-11-24T10:00:00.000Z",
+            counts: { total_rows: 2, accepted_rows: 2, rejected_rows: 0, persisted_feedback: 2 },
+            retry_eligibility: listCalls === 1
+              ? { eligible: true, reason_code: "ELIGIBLE" }
+              : { eligible: false, reason_code: "WORK_IN_PROGRESS" },
+            last_error_code: listCalls === 1 ? "INGESTION_REPLAY_SAFE" : null,
+          }],
+          page: { page: 1, page_size: 50, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/admin/ingestion/previews/prv_race") return response(200, { upload_kind: "RETURNS" });
+      if (url === "/admin/ingestion/jobs/ing_race/retry") {
+        return response(409, {
+          code: "retry_not_eligible",
+          detail: "This ingestion work is not eligible for recovery.",
+          retry_eligibility: { eligible: false, reason_code: "WORK_IN_PROGRESS" },
+        });
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Current eligibility: WORK_IN_PROGRESS.");
+    expect(await screen.findByText("WORK_IN_PROGRESS")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(listCalls).toBe(2);
   });
 
   it("forces a temporary-password change, clears submitted values, and rotates session state", async () => {

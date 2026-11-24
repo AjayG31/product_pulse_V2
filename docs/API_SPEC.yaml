@@ -1,14 +1,14 @@
 openapi: 3.1.0
 info:
   title: ProductPulse REST API
-  version: 1.5.2
-  summary: Approved Design Baseline with PP-003/PP-004, PP-014 queue-attempt snapshot, and PP-007 worker/SQLite policies recorded; remaining calibration and deployment-specific dependencies stay conditional.
+  version: 1.5.4
+  summary: Approved Design Baseline with PP-003/PP-004, PP-014's unchanged classification queue-attempt snapshot, PP-007 worker/SQLite policies, 23 November M3 retry/linkage-recomputation clarifications, and 24 November taxonomy-version-scoped aggregation contracts; remaining calibration and deployment-specific dependencies stay conditional.
   description: |
-    Conditional design baseline updated on 22 November 2026, based on PRD v1.7,
-    Decision Register v2.0, Tech Stack v1.2.0, Architecture v1.5, and Data Model v1.5.2
+    Conditional design baseline updated on 24 November 2026, based on PRD v1.7,
+    Decision Register v2.3, Tech Stack v1.2.1, Architecture v1.6, and Data Model v1.5.5
     (Approved — Design Baseline; conditional implementation dependencies remain),
     Detection Specification v1.1 (draft clarification), Alert Specification v0.3
-    (draft), and AI_SPEC v1.0. This conditional approval does not resolve other
+    (draft), and AI_SPEC v1.2. This conditional approval does not resolve other
     decisions marked Pending Calibration, Proposed, or Open and does not authorize
     activation of detection, notifications, or other functionality whose
     prerequisites remain unresolved.
@@ -53,15 +53,15 @@ tags:
 security:
   - sessionCookie: []
 x-contract-status: Approved — Design Baseline
-x-revision-date: 2026-11-22
-x-approval-date: 2026-11-22
-x-previous-approved-version: 1.5.0
+x-revision-date: 2026-11-24
+x-approval-date: 2026-11-24
+x-previous-approved-version: 1.5.3
 x-source-documents:
   prd: PRD.md v1.7
-  decision_register: DECISION_REGISTER.md v2.0
-  tech_stack: TECH_STACK.md v1.2.0
-  architecture: ARCHITECTURE.md v1.5
-  data_model: DATA_MODEL.md v1.5.2, Approved — Design Baseline with conditional implementation dependencies
+  decision_register: DECISION_REGISTER.md v2.3
+  tech_stack: TECH_STACK.md v1.2.1
+  architecture: ARCHITECTURE.md v1.6
+  data_model: DATA_MODEL.md v1.5.5, Approved — Design Baseline with conditional implementation dependencies
   detection_spec: DETECTION_SPEC.md v1.1, draft clarification; v1.0 remains approved baseline
   alert_spec: ALERT_SPEC.md v0.3, draft; not approved for implementation
 x-contract-decisions:
@@ -77,6 +77,7 @@ x-contract-decisions:
     - LINKAGE_PENDING records may appear in clearly labelled product analytics when product identity is valid; they cannot create product-only incidents or automatic notifications.
     - Detection-result responses expose deterministic NO_TRIGGER and INSUFFICIENT_COVERAGE rationale to ADMIN and BUSINESS_USER roles through a read-only paginated endpoint.
     - A detection-result fingerprint includes the classification-completeness assessment, relevant classification state, and coverage-policy version.
+    - Every classification-backed aggregate uses exactly one explicitly selected taxonomy_version_id. Dashboard/product requests supply it; immutable detection-rule configuration and durable DETECTION jobs snapshot it; detection-result responses echo it and show unclassified counts. Missing IDs fail closed and results are never combined across versions.
     - Historical recomputations do not apply incident changes or create automatic notifications; only qualifying current monitoring results may be applied.
     - Same-severity automatic notification cooldown is fixed at 86400 seconds per incident and severity, shared across all MVP routes; request bodies cannot override it. Higher-severity escalation bypasses the cooldown.
     - A cooldown suppression retains the incident update and appends an auditable SYSTEM_DECISION event; it creates no delivery attempt.
@@ -106,7 +107,7 @@ x-contract-decisions:
     - PB-05 definitions for active warnings, critical warnings, and products at risk remain unresolved; affected KPI values may be null with PENDING_DEFINITION.
     - Notification routing precedence, fallback directory, sink/provider, provider verification for uncertain sends, and external idempotency remain open. Expired SENDING claims with no started attempt return to QUEUED; abandoned IN_PROGRESS attempts become OUTCOME_UNKNOWN and are not automatically resent.
 
-    - PP-007 approves a 5-second SQLite busy timeout with 2 additional `SQLITE_BUSY` retries after rollback; a 5-minute worker lease renewed every 60 seconds; 5-second worker polling; 60-second reconciliation; and 5/15/45-second eligible retry delays. PP-014-created classification work remains limited to 3 total attempts. Other work-type attempt budgets and provider-specific notification retry limits remain unresolved; the latter, routing, sink selection, and external idempotency remain gated under PP-008. Deployment-specific periodic backup cadence and backup retention remain open. Non-login route rate limits and API versioning are unaffected.
+    - PP-007 approves a 5-second SQLite busy timeout with 2 additional `SQLITE_BUSY` retries after rollback; a 5-minute worker lease renewed every 60 seconds; 5-second worker polling; 60-second reconciliation; and 5/15/45-second eligible retry delays. PP-014-created classification work remains limited to 3 total attempts. OPS-02 additionally sets 3 total claims per INGESTION run, per RECONCILIATION job, and per M3 historical DETECTION job. INGESTION Admin recovery creates a new audited run under the same ingestion job and only for safely replayable work; RECONCILIATION and historical DETECTION retry only known-safe transient failures. BATCH_POLL and provider-specific notification retry limits remain unresolved; notification routing, sink selection, and external idempotency remain gated under PP-008. Deployment-specific periodic backup cadence and backup retention remain open. Non-login route rate limits and API versioning are unaffected.
     - GET /incidents exposes its documented filter subset; category_code and source_type are not incident filters. The UI must visibly mark them as unapplied to incident rows, as allowed by PRD §6.2.
     - Taxonomy defaults are not approved by examples in the PRD; no taxonomy seed content is prescribed here.
   proposed-contract-details-for-review:
@@ -541,11 +542,22 @@ paths:
         distinct feedback records; return records and returned units remain
         separate. No return/failure rate is returned without an approved sales
         denominator. PB-05 metrics whose definitions are unsettled are
-        returned with a null value and PENDING_DEFINITION.
+        returned with a null value and PENDING_DEFINITION. Each response uses
+        exactly one explicitly supplied taxonomy_version_id for classification-
+        backed metrics; omission is a validation error, and no cross-version
+        fallback or combination is performed.
       x-required-roles: [ADMIN, BUSINESS_USER]
       x-prd-requirements: [F09, F15, PRD 6.2, PRD 9.1]
       x-acceptance-criteria: [AC08, AC16, AC20, AC21, AC24]
       parameters:
+        - name: taxonomy_version_id
+          in: query
+          required: true
+          description: Explicit taxonomy version for this aggregate context; no latest/active default.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
         - $ref: '#/components/parameters/FromUtc'
         - $ref: '#/components/parameters/ToUtc'
         - $ref: '#/components/parameters/ProductIdFilter'
@@ -566,6 +578,7 @@ paths:
               example:
                 generated_at: '2026-11-21T09:00:00Z'
                 applied_filters:
+                  taxonomy_version_id: tax-v1
                   from_utc: '2026-11-01T00:00:00Z'
                   to_utc: '2026-11-21T00:00:00Z'
                 kpis:
@@ -581,6 +594,10 @@ paths:
                     denominator: 10000
                   unique_defect_feedback_records:
                     value: 423
+                    unit: feedback_records
+                    definition_status: DEFINED_BY_PRD
+                  unclassified_feedback_records:
+                    value: 14
                     unit: feedback_records
                     definition_status: DEFINED_BY_PRD
                   return_records:
@@ -626,11 +643,19 @@ paths:
       operationId: getDashboardTrends
       tags: [Dashboard]
       summary: Get dashboard time series and breakdowns
-      description: Returns count-based series with units, UTC bucket boundaries, coverage, and linkage context. No product failure rates are calculated.
+      description: Returns count-based series with units, UTC bucket boundaries, coverage, and linkage context. Supply exactly one taxonomy_version_id for the aggregate context; no product failure rates or cross-version combinations are calculated.
       x-required-roles: [ADMIN, BUSINESS_USER]
       x-prd-requirements: [F09, F10, PRD 6.2, PRD 6.3, PRD 9.1]
       x-acceptance-criteria: [AC08, AC09, AC12, AC19, AC21]
       parameters:
+        - name: taxonomy_version_id
+          in: query
+          required: true
+          description: Explicit taxonomy version for this aggregate context; no latest/active default.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
         - name: metric
           in: query
           required: true
@@ -666,6 +691,7 @@ paths:
                 unit: feedback_records
                 timezone: UTC
                 applied_filters:
+                  taxonomy_version_id: tax-v1
                   product_id: P1001
                 points:
                   - bucket_start_utc: '2026-11-19T00:00:00Z'
@@ -692,11 +718,19 @@ paths:
         versions used. Historical recomputations are evidence only and do not
         imply an incident or notification. LINKAGE_PENDING records are excluded.
         Results use evaluated_at ordering with detection_result_id as the stable
-        tie-breaker for pagination.
+        tie-breaker for pagination. Each result carries its exact applicable
+        taxonomy_version_id; results from different versions are never merged.
       x-required-roles: [ADMIN, BUSINESS_USER]
       x-prd-requirements: [F08, F09, F15, PRD 6.2, PRD 9.1]
       x-acceptance-criteria: [AC09, AC16, AC20, AC21, AC24]
       parameters:
+        - name: taxonomy_version_id
+          in: query
+          description: Optional exact-version filter; every returned result remains independently version-scoped.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
         - name: decision_state
           in: query
           schema:
@@ -755,11 +789,19 @@ paths:
       operationId: listProducts
       tags: [Products]
       summary: Search and paginate products
-      description: Returns product identities and display fields with count summaries for the requested UTC interval.
+      description: Returns product identities and display fields with count summaries for the requested UTC interval and exactly one explicitly selected taxonomy version. Omission is a validation error; versions are never implicitly combined.
       x-required-roles: [ADMIN, BUSINESS_USER]
       x-prd-requirements: [F09, F10, PRD 6.3]
       x-acceptance-criteria: [AC12, AC19]
       parameters:
+        - name: taxonomy_version_id
+          in: query
+          required: true
+          description: Explicit taxonomy version for classification-backed product counts.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
         - name: q
           in: query
           schema:
@@ -794,12 +836,20 @@ paths:
       operationId: getProduct
       tags: [Products]
       summary: Get product quality detail
-      description: Includes counts, supplier/batch associations, defect breakdown, and labelled LINKAGE_PENDING product-level counts.
+      description: Includes counts, supplier/batch associations, defect breakdown, and labelled LINKAGE_PENDING product-level counts, all classification-backed measures scoped to one explicitly selected taxonomy version.
       x-required-roles: [ADMIN, BUSINESS_USER]
       x-prd-requirements: [F09, F10, PRD 6.3, PRD 7.3]
       x-acceptance-criteria: [AC12, AC19, AC21]
       parameters:
         - $ref: '#/components/parameters/ProductIdPath'
+        - name: taxonomy_version_id
+          in: query
+          required: true
+          description: Explicit taxonomy version for classification-backed product counts.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
         - $ref: '#/components/parameters/FromUtc'
         - $ref: '#/components/parameters/ToUtc'
       responses:
@@ -1880,7 +1930,7 @@ paths:
       operationId: retryIngestionJob
       tags: [Ingestion]
       summary: Retry eligible failed ingestion work
-      description: Admin-only retry of eligible failed/unpersisted work with original identities and the original immutable processing_mode. Accepted rows and incidents are not duplicated. Business Users cannot retry ingestion. Eligible retries use PP-007's 5/15/45-second delay sequence; do not invent an attempt budget for a work type without an approved value. Classification work created by PP-014 remains limited to 3 total claimed attempts.
+      description: Admin-only recovery for safely replayable failed/unpersisted work. A successful request creates one new INGESTION background-job run linked to the same ingestion job and appends an audit event; an idempotent replay returns that same run. The new run has max_attempts=3 total claims including its initial claim. Its internal eligible retries use PP-007's 5/15/45-second delays. Preserve source identities, idempotency, and the original immutable processing_mode; do not duplicate accepted rows. Permanent or unknown outcomes are ineligible. Business Users cannot retry ingestion. PP-014-created CLASSIFICATION work remains a separate max_attempts=3 budget.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -1892,11 +1942,11 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '202':
-          description: Eligible ingestion work is queued for retry.
+          description: A new audited ingestion work run is queued under the existing ingestion job.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/IngestionJob'
+                $ref: '#/components/schemas/IngestionRetryResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1979,7 +2029,7 @@ paths:
       operationId: retryProcessingJob
       tags: [Processing]
       summary: Retry eligible failed processing work
-      description: Admin-only retry. Classification work retains the API path selected by the source ingestion job's immutable processing_mode; retries do not switch between Batch and Responses. Failed or uncertain classifications are never converted to NO_DEFECT. PP-014-created classification work has 3 total claimed attempts and uses the first two PP-007 retry delays (5 and 15 seconds). No other work-type attempt budget is implied.
+      description: Admin-only retry. Classification work retains the API path selected by the source ingestion job's immutable processing_mode; retries do not switch between Batch and Responses. Failed or uncertain classifications are never converted to NO_DEFECT. PP-014-created classification work has 3 total claimed attempts and uses the first two PP-007 retry delays (5 and 15 seconds). INGESTION has 3 claims per run, with Admin recovery creating a new audited run under the same ingestion job only for safely replayable work. RECONCILIATION and M3 historical DETECTION have 3 claims per job type and retry only known-safe transient failures. BATCH_POLL remains unbudgeted and unclaimable.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -2128,10 +2178,15 @@ paths:
       tags: [Reconciliation]
       summary: Explicitly reconcile supplier and batch links
       description: >
-        Admin supplies existing supplier/batch identifiers. The service
+        Admin supplies exact existing supplier/batch identifiers. The service
         validates that the batch belongs to the feedback product and supplier,
         appends before/after linkage history, audits the actor, and queues
-        affected detection recomputation. Source text, identity, event time,
+        historical recomputation of affected aggregates from persisted source
+        facts using exact approved identifiers. If required identifiers remain
+        unresolved, the feedback stays LINKAGE_PENDING and no identifier is
+        inferred. Coverage remains UNKNOWN unless explicit approved coverage
+        evidence establishes it. Historical recomputation does not create or
+        update incidents, send notifications, or activate detection. Source text, identity, event time,
         and originally reported identifiers remain immutable; no IDs are
         inferred or fabricated.
       security:
@@ -2330,7 +2385,7 @@ paths:
       operationId: createDetectionRule
       tags: [Administration]
       summary: Create an immutable rule draft
-      description: PB-01 calibration and owner approval remain pending. Creating a draft does not authorize incident creation or automatic email.
+      description: PB-01 calibration and owner approval remain pending. Creating a draft requires an explicit taxonomy_version_id in the immutable configuration and does not authorize incident creation or automatic email.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -3509,7 +3564,7 @@ components:
       enum: [QUEUED, RUNNING, RETRY_WAIT, COMPLETED, PARTIAL, FAILED]
     TrendMetric:
       type: string
-      enum: [defect_complaints, defect_category_breakdown, top_affected_products, supplier_batch_comparison, returns_by_reason, severity_distribution]
+      enum: [defect_complaints, defect_category_breakdown, top_affected_products, supplier_batch_comparison, returns_by_reason, severity_distribution, unclassified_feedback_records]
     RetryEligibility:
       type: object
       required: [eligible, reason_code]
@@ -3734,13 +3789,15 @@ components:
       additionalProperties: false
     DashboardKpis:
       type: object
-      required: [feedback_records_analyzed, classification_coverage, unique_defect_feedback_records, return_records, returned_units, active_warnings, critical_warnings, products_at_risk]
+      required: [feedback_records_analyzed, classification_coverage, unique_defect_feedback_records, unclassified_feedback_records, return_records, returned_units, active_warnings, critical_warnings, products_at_risk]
       properties:
         feedback_records_analyzed:
           $ref: '#/components/schemas/KpiValue'
         classification_coverage:
           $ref: '#/components/schemas/KpiValue'
         unique_defect_feedback_records:
+          $ref: '#/components/schemas/KpiValue'
+        unclassified_feedback_records:
           $ref: '#/components/schemas/KpiValue'
         return_records:
           $ref: '#/components/schemas/KpiValue'
@@ -3755,7 +3812,12 @@ components:
       additionalProperties: false
     DashboardFilters:
       type: object
+      required: [taxonomy_version_id]
       properties:
+        taxonomy_version_id:
+          type: string
+          minLength: 1
+          maxLength: 128
         from_utc:
           type: [string, 'null']
           format: date-time
@@ -3887,15 +3949,20 @@ components:
     ProductSummary:
       type: object
       description: >
-        Derived product counts. defect_feedback_count counts distinct fully linked feedback
-        records with a completed, validated has_defect=true classification, once per product.
-        LINKAGE_PENDING feedback is excluded from that total and is reported separately. Return
-        records and known returned units are separate measures. Pending-link counts are labelled
-        product analytics only and never imply product-only incidents or automatic notifications.
-      required: [product_id, defect_feedback_count, return_record_count, linkage_pending_feedback_count, linkage_pending_defect_feedback_count, linkage_pending_return_record_count]
+        Derived product counts scoped to the single taxonomy_version_id selected by the request.
+        defect_feedback_count includes distinct fully linked feedback records with a qualifying
+        validated has_defect=true classification. Records without a qualifying completion for
+        this version are shown as unclassified; another version is never used as fallback.
+        LINKAGE_PENDING feedback is reported separately and never implies product-only incidents
+        or automatic notifications. Return records and returned units remain separate measures.
+      required: [product_id, taxonomy_version_id, defect_feedback_count, unclassified_feedback_count, return_record_count, linkage_pending_feedback_count, linkage_pending_defect_feedback_count, linkage_pending_unclassified_feedback_count, linkage_pending_return_record_count]
       properties:
         product_id:
           type: string
+        taxonomy_version_id:
+          type: string
+          minLength: 1
+          maxLength: 128
         name:
           type: [string, 'null']
         category:
@@ -3903,7 +3970,11 @@ components:
         defect_feedback_count:
           type: integer
           minimum: 0
-          description: Distinct fully linked feedback source records with a completed, validated defect classification; each record counts once per product.
+          description: Distinct fully linked feedback source records with a qualifying validated defect classification for taxonomy_version_id; each record counts once per product.
+        unclassified_feedback_count:
+          type: integer
+          minimum: 0
+          description: Fully linked product feedback records without a qualifying validated completed classification for taxonomy_version_id; separate from definitive defect counts.
         return_record_count:
           type: integer
           minimum: 0
@@ -3919,7 +3990,11 @@ components:
         linkage_pending_defect_feedback_count:
           type: integer
           minimum: 0
-          description: Distinct pending-link feedback records with a completed, validated has_defect=true classification; separate from defect_feedback_count.
+          description: Distinct pending-link feedback records with a qualifying validated has_defect=true classification for taxonomy_version_id; separate from defect_feedback_count.
+        linkage_pending_unclassified_feedback_count:
+          type: integer
+          minimum: 0
+          description: Distinct LINKAGE_PENDING feedback records without a qualifying validated completed classification for taxonomy_version_id; separate from classified pending-link counts.
         linkage_pending_return_record_count:
           type: integer
           minimum: 0
@@ -3931,8 +4006,13 @@ components:
       additionalProperties: false
     ProductPage:
       type: object
-      required: [items, page]
+      required: [taxonomy_version_id, items, page]
       properties:
+        taxonomy_version_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Exact taxonomy_version_id supplied for the product-count context, including when items is empty.
         items:
           type: array
           items:
@@ -3959,8 +4039,12 @@ components:
     DefectBreakdown:
       type: object
       description: Product issue breakdown with linked and LINKAGE_PENDING distinct feedback counts kept separate. Pending counts are analytics only and are not incident evidence.
-      required: [category_code, category_name, logical_defect_id, display_name, distinct_feedback_count, linkage_pending_distinct_feedback_count]
+      required: [taxonomy_version_id, category_code, category_name, logical_defect_id, display_name, distinct_feedback_count, linkage_pending_distinct_feedback_count]
       properties:
+        taxonomy_version_id:
+          type: string
+          minLength: 1
+          maxLength: 128
         category_code:
           type: string
         category_name:
@@ -3977,10 +4061,6 @@ components:
           type: integer
           minimum: 0
           description: Distinct LINKAGE_PENDING feedback records for this product and logical defect, shown separately and excluded from incident-capable counts.
-        taxonomy_versions:
-          type: array
-          items:
-            type: string
       additionalProperties: false
     ProductDetail:
       type: object
@@ -4290,10 +4370,15 @@ components:
       additionalProperties: false
     DetectionRationale:
       type: object
-      required: [detection_result_id, rule_version, coverage_policy_version, evaluated_at, observed_window, baseline_window, observed_count, baseline_28d_count, observed_evidence_count, baseline_evidence_count, normalized_baseline_7d, observed_to_baseline_ratio, baseline_source_coverage_state, observed_classification_coverage_state, observed_classification_assessed_count, observed_classification_complete_count, baseline_classification_coverage_state, baseline_classification_assessed_count, baseline_classification_complete_count, coverage_state, decision_state, evidence_feedback_count, thresholds_applied]
+      required: [detection_result_id, taxonomy_version_id, rule_version, coverage_policy_version, evaluated_at, observed_window, baseline_window, observed_count, baseline_28d_count, observed_evidence_count, baseline_evidence_count, normalized_baseline_7d, observed_to_baseline_ratio, baseline_source_coverage_state, observed_classification_coverage_state, observed_classification_assessed_count, observed_classification_complete_count, observed_classification_unclassified_count, baseline_classification_coverage_state, baseline_classification_assessed_count, baseline_classification_complete_count, baseline_classification_unclassified_count, coverage_state, decision_state, evidence_feedback_count, thresholds_applied]
       properties:
         detection_result_id:
           type: string
+        taxonomy_version_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The one taxonomy version used by this immutable aggregation context.
         rule_version:
           type: string
         coverage_policy_version:
@@ -4339,6 +4424,10 @@ components:
         observed_classification_complete_count:
           type: integer
           minimum: 0
+        observed_classification_unclassified_count:
+          type: integer
+          minimum: 0
+          description: Observed-period assessed records without a qualifying completed classification for taxonomy_version_id.
         baseline_classification_coverage_state:
           type: string
           enum: [COMPLETE, INCOMPLETE, UNKNOWN]
@@ -4348,6 +4437,10 @@ components:
         baseline_classification_complete_count:
           type: integer
           minimum: 0
+        baseline_classification_unclassified_count:
+          type: integer
+          minimum: 0
+          description: Baseline-period assessed records without a qualifying completed classification for taxonomy_version_id.
         coverage_state:
           type: string
           enum: [SUFFICIENT_NONZERO, SUFFICIENT_ZERO, INSUFFICIENT]
@@ -5133,6 +5226,15 @@ components:
         retry_eligibility:
           $ref: '#/components/schemas/RetryEligibility'
       additionalProperties: false
+    IngestionRetryResponse:
+      type: object
+      required: [ingestion_job, run]
+      properties:
+        ingestion_job:
+          $ref: '#/components/schemas/IngestionJob'
+        run:
+          $ref: '#/components/schemas/BackgroundJob'
+      additionalProperties: false
     IngestionJobPage:
       type: object
       required: [items, page]
@@ -5160,9 +5262,9 @@ components:
           type: integer
           minimum: 0
         max_attempts:
-          type: integer
+          type: [integer, 'null']
           minimum: 1
-          description: For a CLASSIFICATION item created by PP-014, 3 total claimed attempts including the initial attempt, per the scoped OPS-02 approval; other job-type budgets remain open.
+          description: Total claimed-attempt budget including the initial claim. PP-014-created CLASSIFICATION and each INGESTION run have 3; RECONCILIATION and M3 historical DETECTION have 3 per job type. Null means no approved budget and the job cannot be claimed or automatically replayed; BATCH_POLL remains unbudgeted.
         scheduled_at:
           type: string
           format: date-time
@@ -5229,9 +5331,9 @@ components:
           type: integer
           minimum: 0
         max_attempts:
-          type: integer
+          type: [integer, 'null']
           minimum: 1
-          description: For a CLASSIFICATION item created by PP-014, 3 total claimed attempts including the initial attempt, per the scoped OPS-02 approval; other job-type budgets remain open.
+          description: Total claimed-attempt budget including the initial claim. PP-014-created CLASSIFICATION and each INGESTION run have 3; RECONCILIATION and M3 historical DETECTION have 3 per job type. Null means no approved budget and the job cannot be claimed or automatically replayed; BATCH_POLL remains unbudgeted.
         scheduled_at:
           type: string
           format: date-time
@@ -5465,8 +5567,13 @@ components:
       additionalProperties: false
     DetectionRuleConfiguration:
       type: object
-      required: [observed_window_days, baseline_window_days, thresholds]
+      required: [taxonomy_version_id, observed_window_days, baseline_window_days, thresholds]
       properties:
+        taxonomy_version_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Exact taxonomy version explicitly selected by the Admin for contexts created under this immutable rule; no implicit latest/active selection.
         observed_window_days:
           type: integer
           const: 7

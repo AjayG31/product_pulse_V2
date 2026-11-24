@@ -1,15 +1,15 @@
 # ProductPulse AI Classification Specification
 
-**Version:** 1.0  
-**Status:** Approved — Design Baseline  
-**Approval date:** 21 November 2026  
+**Version:** 1.2  
+**Status:** Approved — Design Baseline with scoped 23–24 November clarifications  
+**Approval date:** 21 November 2026; classification-attempt authority approved 23 November 2026; taxonomy-version applicability approved 24 November 2026  
 **Scope:** Backend classification of review and return feedback through OpenAI Responses API and Batch API
 
 ## 1. Purpose and approval boundary
 
 This specification defines the AI-assisted classification boundary for ProductPulse. It covers the common classification contract, taxonomy governance, backend request construction, provider workflows, validation, durable states, recovery, traceability, safety, and evaluation.
 
-The Product Owner approved this v1.0 document as the AI design baseline on 21 November 2026, subject to the implementation and calibration conditions in Section 18. The PRD remains the product-requirements source of truth. This approval establishes the shared classification contract, provider workflows, validation, state mapping, traceability, safety boundary, and evaluation approach. It does not resolve the model identifier, initial taxonomy seed, numeric retry/rate limits, evaluation gates, cost limits, or any other decision listed as pending. Candidate category-code spellings in this specification remain non-normative review material and must not be activated as an approved taxonomy without the required product-owner decision. Each pending decision must be resolved before its dependent implementation or evaluation activity listed in Section 18.
+The Product Owner approved this v1.0 document as the AI design baseline on 21 November 2026, subject to the implementation and calibration conditions in Section 18. On 23 November 2026, the Product Owner approved the scoped classification-attempt authority clarification; on 24 November 2026, the Product Owner approved the taxonomy-version applicability policy for aggregation. These scoped clarifications are recorded in this v1.2 revision. The PRD remains the product-requirements source of truth. The approval establishes the shared classification contract, provider workflows, validation, state mapping, traceability, safety boundary, evaluation approach, within-version attempt selection, and explicit version-scoped aggregation. It does not resolve the model identifier, initial taxonomy seed, other_product_defect issue-code policy, provider rate/concurrency limits, evaluation gates, cost limits, or any other decision listed as pending. Candidate category-code spellings in this specification remain non-normative review material and must not be activated as an approved taxonomy without the required product-owner decision. Each pending decision must be resolved before its dependent implementation or evaluation activity listed in Section 18.
 
 Approval as a design baseline does not authorize implementation that depends on unresolved selections or use of real or sensitive customer data. The MVP data boundary remains synthetic or permitted public non-sensitive data.
 
@@ -489,6 +489,22 @@ Admin processing views expose aggregate counts and safe per-job/per-attempt stat
 
 Classification coverage remains the PRD metric: successfully classified eligible records divided by validated eligible records. Pending, failed, and needs-review items reduce coverage and remain visible. Incomplete classification coverage must not be presented as evidence of low defect risk.
 
+### 13.4 Authoritative completed attempt and applicable taxonomy version — approved 23–24 November 2026
+
+For each source record and applicable `taxonomy_version_id`, use the latest successfully completed, fully validated classification attempt. A qualifying attempt has `status=COMPLETED`, `needs_review=0`, a definitive `has_defect` value, and the schema-valid, source-matched, taxonomy-valid primary label required by this specification and the Data Model. Select deterministically by persisted UTC `completed_at DESC`, then unique `classification_id COLLATE BINARY DESC` when completion times tie. Do not use `attempt_number` as the authority order.
+
+`QUEUED`, `IN_PROGRESS`, `RETRYABLE_FAILED`, `TERMINAL_FAILED` (including invalid output), and `NEEDS_REVIEW` attempts do not replace a qualifying completed result. If no qualifying result exists for the applicable taxonomy version, the record is unclassified for that context. Never add attempts together. Count a source record at most once within an applicable aggregation context, while preserving the existing rule that distinct validated labels may contribute to distinct logical-defect contexts. Keep every attempt immutable and preserve its audit and source traceability.
+
+#### Applicable taxonomy version for an aggregation context — approved 24 November 2026
+
+An aggregation context is one classification-backed aggregate calculation with a defined source cohort and filters/windows. Every context has exactly one explicit `taxonomy_version_id`. For persisted detection contexts, an Admin supplies the exact ID in the immutable detection-rule configuration; the backend validates and snapshots it on the durable DETECTION job before work is claimed, then persists the same ID on the result and includes it in the result input fingerprint. For read-time dashboard/product aggregate requests, the caller supplies one exact `taxonomy_version_id`; the response echoes it in `applied_filters`. These query-time views do not create durable aggregate rows; any materialized aggregate must persist the selected ID. A classification-derived aggregate request without an ID is rejected. There is no default to the current, active, or latest taxonomy version.
+
+When an existing aggregation context is recomputed, including linkage-triggered historical recomputation, reuse that context's persisted version. A new context requires a new explicit version assignment. Retries and replays use the snapshotted ID even if taxonomy activation changes in the meantime. A missing or invalid version fails the request/job closed and produces no aggregate result; it cannot become an implicit context or an all-unclassified result. After a valid version is established, records without qualifying classifications for that version are unclassified. Never fall back to another taxonomy version.
+
+For the selected version, use only the latest qualifying attempt defined above. A record with no qualifying completion in that version—including one with qualifying completions only under another version—is unclassified in that context. A validated definitive `NO_DEFECT` is classified, not unclassified, and does not contribute to a defect count. Expose unclassified record counts separately from definitive defect counts and classification-coverage state. Preserve each historical aggregate's version and never combine counts across versions, even when two versions explicitly map codes to the same `logical_defect_id`. Taxonomy changes do not create attempts or reclassify historical records automatically.
+
+Historical recomputation follows the approved DAI-06 boundary: it does not create or update incidents, send notifications, or activate detection. This rule selects the latest result within the one explicitly assigned version for each context. It does not authorize taxonomy activation, model execution, or any pending seed/issue-code choice.
+
 ## 14. Prompt-injection protection and sensitive-data handling
 
 - Treat every feedback string as untrusted data, including content that claims to be a system/developer instruction, asks for secrets, requests a tool call, or attempts to alter categories.
@@ -631,8 +647,8 @@ The uncertain example persists as NEEDS_REVIEW, is excluded from confirmed defec
 | PRD §§9, 11; AGENTS.md | Deterministic counts, thresholds, and alerts; source-to-classification-to-incident traceability; backend authorization. | Sections 2, 3, 6, and 13. |
 | PRD §§14–15; AC06, AC17, AC24 | Evaluation, injection handling, valid completed schemas, explicit incomplete coverage. | Sections 11, 14, and 15. |
 | Architecture §§8–10 | One backend worker; durable jobs; provider calls outside transactions; common model/contract; explicit states and linkage rules. | Sections 5–6, 9–13. |
-| DATA_MODEL v1.4 (Draft; v1.1 remains last approved) §§4.5–4.6, 6 | Classification attempts, labels, taxonomy versions, durable source/job and Batch-file correlation, path, model/prompt/schema, usage, cost, latency, safe errors, source identity. | Sections 4, 7, 10–13. |
-| API_SPEC.yaml v1.4.0 (Approved — Design Baseline, conditional; v1.1.0 was the previous approved version) | Immutable import processing mode, automatic dispatch, Admin retry eligibility response, classification states and summary fields, backend-only provider boundary. | Sections 3, 6, 9–13. |
+| DATA_MODEL v1.5.5 (Approved — Design Baseline, conditional) §§4.5–4.6, 6 | Classification attempts, labels, taxonomy versions, durable source/job and Batch-file correlation, path, model/prompt/schema, usage, cost, latency, safe errors, source identity, and version-scoped aggregate contexts. | Sections 4, 7, 10–13. |
+| API_SPEC.yaml v1.5.4 (Approved — Design Baseline, conditional) | Immutable import processing mode, automatic dispatch, Admin retry eligibility and recovery-run response, classification states and summary fields, backend-only provider boundary, and explicit taxonomy-version aggregate filters/results. | Sections 3, 6, 9–13. |
 | DAI-03/04/05/07 | Explicit states; versioned taxonomy; one model and shared contract; import mode immutability. | Sections 4–12. |
 | EV-01/02/03/05 | Held-out discipline, class-specific gates, provisional detection recall, reporting without an unapproved cost budget. | Section 15. |
 
@@ -658,7 +674,7 @@ The uncertain example persists as NEEDS_REVIEW, is excluded from confirmed defec
 | Initial taxonomy category-code spellings and specific issue-code seed, including no-defect and uncertain entries | Not approved; Product Owner / taxonomy configuration decision. | Activating an initial taxonomy, treating the candidate schema enums as final in implementation, or freezing the taxonomy for held-out evaluation. |
 | Specific-code policy for the other_product_defect category | Not approved; Product Owner / taxonomy decision. Until resolved, a definitive uncoded defect maps to uncertainty, not to a shared generic issue cluster. | Enabling definitive OTHER defect classifications. |
 | Selected OpenAI model identifier and supported snapshot | DAI-05 selection process approved; identifier unresolved. | AI integration implementation and final model evaluation. |
-| Numeric retry budgets, backoff bounds, rate/concurrency limits, and reconciliation cadence | OPS-02 / processing specification open. | Implementation of retry, rate-limit handling, and Batch polling/reconciliation behavior. |
+| Classification retry budget and provider request limits | `CLASSIFICATION max_attempts=3` remains approved under PP-014. Provider rate/concurrency limits remain open; `BATCH_POLL` remains unbudgeted under OPS-02. | Implementing provider rate/concurrency controls or changing the approved classification retry behavior. |
 | Lease duration, stale-lease recovery, and SQLite busy policy | ARC-04 / OPS-02 open. | Worker implementation. |
 | Held-out record and scenario counts/minimums | EV-01 Pending Calibration. | Locking final evaluation data or claiming stable held-out metrics. |
 | Class-specific classification gates and regression thresholds | EV-02 Pending Calibration. | Final classification local evaluation/pre-merge checklist configuration and final held-out evaluation. |
@@ -669,7 +685,7 @@ The uncertain example persists as NEEDS_REVIEW, is excluded from confirmed defec
 | Provider input size and context overflow policy | Model-dependent; no maximum feedback length or token policy is approved. Do not silently truncate source text; define deterministic preflight and visible handling after selecting the model. | Implementation. |
 | Batch local temporary-file cleanup and retention | OPS-03 retention/runbook decision; provider files expire by default after 30 days. | Operations implementation. |
 
-Approval condition: this v1.0 baseline does not change any Pending Calibration, Proposed, or Open status. In particular, the model identifier, taxonomy seed, numeric retry/rate limits, evaluation gates, and cost limits remain pending and must be resolved before the dependent implementation or evaluation listed above proceeds. Cost reporting remains required independently of an unapproved cost limit or gate.
+Approval condition: this design baseline and scoped clarifications do not change any other Pending Calibration, Proposed, or Open status. In particular, the model identifier, initial taxonomy seed, other_product_defect code policy, provider rate/concurrency limits, evaluation gates, and cost limits remain pending and must be resolved before the dependent implementation or evaluation listed above proceeds. PP-014's `CLASSIFICATION max_attempts=3` remains unchanged. Cost reporting remains required independently of an unapproved cost limit or gate.
 
 ## 19. OpenAI documentation references
 

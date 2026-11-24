@@ -13,7 +13,17 @@ from productpulse.ingestion.artifacts import ArtifactIntegrityError, ArtifactSto
 from productpulse.ingestion import parser
 from productpulse.ingestion.parser import CsvInputError, parse_preview
 from productpulse.main import create_app
-from productpulse.models import Base, CsvUpload, Feedback, IngestionJob, Product, UploadPreview, UploadPreviewRow, User
+from productpulse.models import (
+    Base,
+    CsvUpload,
+    Feedback,
+    IngestionJob,
+    Product,
+    RejectionReportArtifact,
+    UploadPreview,
+    UploadPreviewRow,
+    User,
+)
 from productpulse.security.identity import normalize_email
 from productpulse.security.passwords import hash_password
 from productpulse.security.sessions import utc_text
@@ -147,7 +157,11 @@ def test_admin_preview_persists_safe_row_outcomes_and_is_idempotent(tmp_path):
             }
             assert "private note" not in response.text
             assert "customer details" not in response.text
-            assert "rejection_report" not in preview
+            assert preview["rejection_report"] == {
+                "available": True,
+                "href": f"/admin/ingestion/previews/{preview['preview_id']}/rejection-report",
+                "content_type": "text/csv",
+            }
 
             rows = client.get(f"/admin/ingestion/previews/{preview['preview_id']}/rows?page_size=100")
             assert rows.status_code == 200
@@ -156,6 +170,19 @@ def test_admin_preview_persists_safe_row_outcomes_and_is_idempotent(tmp_path):
             ]
             assert "great quality" not in rows.text
             assert rows.json()["items"][3]["rejection_codes"] == ["INVALID_TIMESTAMP"]
+
+            report = client.get(preview["rejection_report"]["href"])
+            assert report.status_code == 200
+            assert report.headers["content-type"].startswith("text/csv; charset=utf-8")
+            assert report.headers["content-disposition"] == 'attachment; filename="rejection-report.csv"'
+            assert report.headers["x-content-sha256"] == hashlib.sha256(report.content).hexdigest()
+            assert report.headers["etag"] == f'"{hashlib.sha256(report.content).hexdigest()}"'
+            report_rows = list(csv.DictReader(io.StringIO(report.text)))
+            assert [row["outcome"] for row in report_rows] == ["CONFLICT", "REJECTED"]
+            assert "DUPLICATE_NOOP" not in report.text
+            assert "customer details" not in report.text
+            assert "private note" not in report.text
+            assert "great quality" not in report.text
 
             detail = client.get(f"/admin/ingestion/previews/{preview['preview_id']}")
             assert detail.status_code == 200 and detail.json() == preview
@@ -176,10 +203,18 @@ def test_admin_preview_persists_safe_row_outcomes_and_is_idempotent(tmp_path):
             assert len(db.scalars(select(CsvUpload)).all()) == 1
             assert len(db.scalars(select(UploadPreview)).all()) == 1
             assert len(db.scalars(select(UploadPreviewRow)).all()) == 4
+            upload_artifact_id = db.scalar(select(CsvUpload.artifact_id))
+            reports = db.scalars(select(RejectionReportArtifact)).all()
+            assert len(reports) == 1
+            report_metadata = (reports[0].artifact_id, reports[0].file_sha256, reports[0].file_size_bytes)
         artifacts = list((settings.data_dir / "artifacts").glob("art_*.csv"))
-        assert len(artifacts) == 1
-        assert artifacts[0].name.startswith("art_") and artifacts[0].name.endswith(".csv")
-        assert hashlib.sha256(artifacts[0].read_bytes()).hexdigest() == hashlib.sha256(content).hexdigest()
+        assert len(artifacts) == 2
+        assert all(path.name.startswith("art_") and path.name.endswith(".csv") for path in artifacts)
+        uploaded_artifact = next(path for path in artifacts if path.stem == upload_artifact_id)
+        assert hashlib.sha256(uploaded_artifact.read_bytes()).hexdigest() == hashlib.sha256(content).hexdigest()
+        report_artifact = next(path for path in artifacts if path.stem == report_metadata[0])
+        assert hashlib.sha256(report_artifact.read_bytes()).hexdigest() == report_metadata[1]
+        assert report_artifact.stat().st_size == report_metadata[2]
     finally:
         engine.dispose()
 

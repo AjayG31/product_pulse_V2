@@ -1,10 +1,10 @@
 # ProductPulse UI/UX Specification
 
-**Version:** 0.4.1  
+**Version:** 0.4.3  
 **Status:** Approved — Design Baseline  
-**Approval date:** 22 November 2026  
+**Approval date:** 22 November 2026; scoped taxonomy-version display clarification approved 24 November 2026  
 **Requirements source:** PRD v1.7  
-**Related specifications:** Architecture v1.5 (Approved); AI_SPEC v1.0 (Approved — Design Baseline); Tech Stack v1.2.0; Detection Specification v1.1 (Draft clarification; v1.0 remains the Approved Design Baseline); Alert Specification v0.3 (Draft); API_SPEC.yaml v1.5.2 (Approved — Design Baseline, conditional); Data Model v1.5.2 (Approved — Design Baseline, conditional); Security v1.1; Decision Register v2.0.
+**Related specifications:** Architecture v1.6 (Approved); AI_SPEC v1.2 (Approved — Design Baseline); Tech Stack v1.2.1; Detection Specification v1.1 (Draft clarification; v1.0 remains the Approved Design Baseline); Alert Specification v0.3 (Draft); API_SPEC.yaml v1.5.4 (Approved — Design Baseline, conditional); Data Model v1.5.5 (Approved — Design Baseline, conditional); Security v1.1; Decision Register v2.3.
 
 ## 1. Purpose and approval boundary
 
@@ -12,7 +12,7 @@ This specification defines the React + TypeScript presentation layer for the Pro
 
 The API is the authorization and validation boundary. UI visibility and client validation improve usability but do not grant access. The browser does not call OpenAI or an email provider, run detection formulas, decide alert eligibility, or hold provider credentials.
 
-The original conditional design baseline was approved on 21 November 2026; this revision records the Product Owner-approved PP-003 authentication, PP-004 ingestion, and PP-007 operational decisions dated 22 November 2026. It does not approve the draft Detection or Alert specifications or authorize application code. The API and Data Model conditional design baselines are reflected here; exact readiness degradation/provider-health assessment parameters remain pending for the operations specification. This approval does not activate detection, notification routes, or other functionality whose prerequisites remain unresolved. Implementation remains subject to the pending decisions documented in this specification and its related contracts.
+The original conditional design baseline was approved on 21 November 2026; this revision records the Product Owner-approved PP-003 authentication, PP-004 ingestion, and PP-007 operational decisions dated 22 November 2026, 23 November M3 retry and ingestion-recovery display contracts, and 24 November taxonomy-version applicability display contract. It does not approve the draft Detection or Alert specifications or authorize the M3 implementation milestone or application code. The API and Data Model conditional design baselines are reflected here; exact readiness degradation/provider-health assessment parameters remain pending for the operations specification. This approval does not activate detection, notification routes, or other functionality whose prerequisites remain unresolved. Implementation remains subject to the pending decisions documented in this specification and its related contracts.
 
 ### 1.1 Governing display rules
 
@@ -22,7 +22,8 @@ The original conditional design baseline was approved on 21 November 2026; this 
 - Exclude pending, failed, needs-review, uncertain, invalid, or otherwise non-definitive classifications from confirmed defect counts. Show processing or coverage incompleteness separately.
 - Show LINKAGE_PENDING product analytics in a separately labelled context. Such records do not establish supplier/batch incidents or automatic notifications.
 - Show UTC event times and the exact API-provided event window. Do not substitute the user's local timezone for event-window calculations.
-- Keep automatic detection and automatic notification activation visibly pending until the required classification-attempt authority, DAI-06 coverage policy and calibration, and PB-01 threshold calibration are approved. The UI must not present the feature as active while these gates are unresolved.
+- Keep automatic detection and automatic notification activation visibly pending until DAI-06 coverage policy/calibration, PB-01 threshold calibration, and the applicable evaluation/provider/routing gates are resolved. The approved taxonomy-version policy requires one explicit version per aggregate context; it does not activate detection.
+- For every classification-backed dashboard, trend, product, or detection-result context, show the one taxonomy version returned by the API. Require the user to select a version for read-time aggregates; do not silently choose the latest or active version. Show records without a qualifying result for that version as unclassified, separately from definitive defect counts and coverage state. Never combine counts across taxonomy versions.
 - Use the role-visible GET /readiness projection for coarse detection, processing, notification-configuration, and email-provider states. Display UNKNOWN as unknown; never map it to ACTIVE or HEALTHY, style it as a healthy state, or present it as evidence of zero product defects. Never infer readiness from Admin-only operations data or browser calculations. INACTIVE detection is not zero defects. This projection reveals no provider identity, route, recipient configuration, credentials, or secrets and does not authorize an action.
 - Enable manual notification confirmation only when readiness reports manual_confirmation_state ENABLED and the authorized recipient list is available. An email_provider_state of UNAVAILABLE is a separate warning; confirmation may still persist an outbox event, but the UI must show only the API's persisted outcome and must never imply delivery. No real external or supplier email is in scope.
 
@@ -101,6 +102,7 @@ Hiding Admin navigation is not an authorization control. A Business User who fol
 **KPI cards**
 - Feedback records analysed.
 - Classification coverage, using the PRD definition: successfully classified eligible records divided by validated eligible records.
+- Unclassified feedback records for the explicitly selected taxonomy version, shown separately from definitive defect counts.
 - Unique defect-bearing feedback records.
 - Return-record count.
 - Returned units, when returned-unit data is available; always labelled separately from return records.
@@ -113,7 +115,7 @@ Each card shows its unit, applicable filter/window context, and freshness. Do no
 Use the trend metrics defined by the API: defect complaints, defect-category breakdown, top affected products, supplier/batch comparison, returns by reason, and severity distribution. Label every axis/legend with the API-provided unit and time bucket. Use UTC day/week buckets and display the returned bucket boundaries. Do not calculate an additional percentage, rate, or severity from chart points.
 
 **Filters**
-Expose date range, product, category, supplier, batch, logical defect, severity, incident status, and source type where supported. Dashboard summary and trend panels receive their defined filters. The warning list receives only its API-supported subset; category_code and source_type are visibly marked as not applied to incident rows. Date filters use inclusive from_utc and exclusive to_utc bounds. Carry only compatible applied filters into drill-downs.
+Expose taxonomy version, date range, product, category, supplier, batch, logical defect, severity, incident status, and source type where supported. Require one taxonomy version before showing classification-backed dashboard/product aggregates; a missing selection is not treated as the current version. Dashboard summary and trend panels receive their defined filters. The warning list receives only its API-supported subset; category_code and source_type are visibly marked as not applied to incident rows. Date filters use inclusive from_utc and exclusive to_utc bounds. Carry only compatible applied filters into drill-downs.
 
 **Warning list**
 Show incident ID, severity as text and color, product/supplier/batch/defect identity, first-detected and last-seen times, status, and a link to incident detail. Do not show an owner field unless an approved owner-assignment feature is later added; ownership is P1 in the PRD.
@@ -135,6 +137,7 @@ Show last successful import, classification, and detection recomputation; queued
 **Content and behavior**
 - Product search and selection, product identity, and supplier/batch associations returned by the API.
 - Count-based trend and defect-category views, affected-batch comparisons, and return-reason views. Keep each unit explicit and separate from returned units.
+- Show the selected taxonomy version in aggregate headings and the API-provided unclassified count for that product/version context. Do not pool defect breakdowns from multiple versions; selecting a different version creates a separate view.
 - Clearly separate fully linked totals from LINKAGE_PENDING product analytics. Never imply that unresolved supplier/batch feedback belongs to a batch.
 - Do not display product failure rates or feedback proportions without an API-defined eligible denominator. PB-05 definitions remain pending.
 - Data points link to contributing feedback or incident records. Preserve the selected product and compatible date/defect filters.
@@ -178,7 +181,7 @@ Show last successful import, classification, and detection recomputation; queued
 **Header and rationale**
 - Show incident ID, severity, current status, product/supplier/batch/defect identity, first detection, last seen, and latest update.
 - If previous_episode_id is present, show a keyboard-accessible link to the prior episode's investigation detail. Identify it as the linked previous episode; do not infer recurrence relationships beyond the returned ID.
-- Show the stored detection rationale: observed distinct feedback count, baseline result, observation and baseline UTC windows, coverage/completeness state, applicable threshold and rule version, and linked evidence references when returned.
+- Show the stored detection rationale: taxonomy version, observed distinct feedback count, baseline result, observation and baseline UTC windows, coverage/completeness state, unclassified count for each period, applicable threshold and rule version, and linked evidence references when returned.
 - Explicitly label zero baseline, insufficient baseline, and unknown coverage according to the API. Do not substitute a threshold, window, or baseline formula in the client.
 - Show evidence uncertainty and linkage status. Do not present a model severity hint as final incident severity.
 
@@ -245,11 +248,11 @@ Use the opaque preview token and content hash returned by the server; do not inv
 - Job detail: counts, linked preview, report link, processing state, and relevant retry availability.
 - Paged preview outcomes/error report identify row and safe rejection/conflict reason. Do not place raw feedback text, secrets, file paths, or provider payloads in operational messages.
 - Show classification/background processing as a separate job family so users can distinguish ingestion from classification, Batch polling, detection, and reconciliation.
-- Show the API's explicit retry_eligibility and safe reason code on Admin job detail. Offer Retry only when eligible is true; the server rechecks eligibility at submission and may return 409 with the current reason. Retry preserves source identity and the original processing mode. PP-014-created classification work has `max_attempts=3` total and uses the first two PP-007 delays (5 and 15 seconds); do not imply attempt budgets for other job types or notification providers.
+- Show the API's explicit retry_eligibility and safe reason code on Admin job detail. Offer Retry only when eligible is true; the server rechecks eligibility at submission and may return 409 with the current reason. Retry preserves source identity and the original processing mode. An accepted Admin ingestion recovery shows the new audited run ID under the same ingestion job; a new run has 3 total claims and is offered only for safely replayable work. PP-014-created classification work has its separate `max_attempts=3` budget and uses the first two PP-007 delays (5 and 15 seconds). Reconciliation and historical detection jobs have 3 claims per job type; do not imply a budget for BATCH_POLL or notification providers.
 - Allow Admins to inspect and resolve source/mapping conflicts through the explicit reconciliation flow. Explain that a correction can trigger affected recomputation; the UI does not resolve linkage by guessing.
 - Show operation summary data for queues, failures, freshness, coverage, outbox, model/version, usage, and estimated cost where returned. Cost is report-only until an approved budget gate exists.
 
-**API mapping:** GET /admin/ingestion/jobs; GET /admin/ingestion/jobs/{job_id}; POST /admin/ingestion/jobs/{job_id}/retry; GET /admin/processing/jobs; GET /admin/processing/jobs/{background_job_id}; POST /admin/processing/jobs/{background_job_id}/retry; GET /admin/reconciliation/conflicts; GET /admin/reconciliation/conflicts/{conflict_id}; POST /admin/reconciliation/conflicts/{conflict_id}/resolve; PUT /admin/feedback/{feedback_id}/linkage; GET /admin/operations/summary; GET /admin/source-coverage; GET /admin/audit-events. Admin job responses carry retry_eligibility; this is a server-derived hint, never a replacement for the server-side retry check.
+**API mapping:** GET /admin/ingestion/jobs; GET /admin/ingestion/jobs/{job_id}; POST /admin/ingestion/jobs/{job_id}/retry; GET /admin/processing/jobs; GET /admin/processing/jobs/{background_job_id}; POST /admin/processing/jobs/{background_job_id}/retry; GET /admin/reconciliation/conflicts; GET /admin/reconciliation/conflicts/{conflict_id}; POST /admin/reconciliation/conflicts/{conflict_id}/resolve; PUT /admin/feedback/{feedback_id}/linkage; GET /admin/operations/summary; GET /admin/source-coverage; GET /admin/audit-events. Admin job responses carry retry_eligibility; this is a server-derived hint, never a replacement for the server-side retry check. An ingestion recovery response identifies both the stable ingestion job and the new background-job run.
 
 ### 4.10 Admin Settings and User Management
 
@@ -257,7 +260,7 @@ Use the opaque preview token and content hash returned by the server; do not inv
 
 **Sections**
 - **Taxonomy:** list versions, inspect categories/issues, create immutable drafts, activate only a reviewed and approved taxonomy version. Do not hard-code candidate AI_SPEC codes as active values.
-- **Detection rules:** list versions, create drafts, show calibration/activation state, and permit activation only after PB-01 and DAI-06 parameters and classification-attempt authority are resolved and the backend accepts activation. Until then display “Pending calibration” and keep active detection unavailable.
+- **Detection rules:** list versions, create drafts with an explicit taxonomy_version_id, show calibration/activation state, and permit activation only after PB-01 and DAI-06 parameters and the applicable evaluation gates are resolved and the backend accepts activation. The taxonomy-version applicability rule is approved but does not activate detection. Until remaining gates pass, display “Pending calibration” and keep active detection unavailable.
 - **Recipient directory and groups:** list/manage approved sandbox/capture recipients, groups, and membership history. No arbitrary address entry, supplier group, or real-send setup. The final directory and routing rules remain pending.
 - **Notification routing:** list/create immutable inactive route definitions and show the fixed 86,400-second same-severity cooldown. Do not provide a cooldown override. Keep route activation disabled until routing precedence, fallback, provider, and related pending decisions are approved.
 - **Users:** list Admin and Business User accounts, provision accounts with a compliant temporary password, deactivate, and Admin-reset a password. Clear write-only password values from UI state after submission; never display or return stored passwords/hashes. The user must change an initial/reset temporary password before normal use. Deactivation/reset revoke active sessions. Admin hands temporary credentials directly to the verified user in person outside ProductPulse; do not email them. Do not add public registration, Viewer role, deletion, or reactivation.
@@ -373,6 +376,7 @@ These are conceptual UI responsibilities, not a component-library selection.
 - UI-AC03: Every KPI and chart displays its unit and relevant time/filter context. Pending-definition values are not rendered as zero.
 - UI-AC04: Dashboard summary and trends refresh on the 30-second cadence and manual refresh. A failed refresh marks prior values stale.
 - UI-AC05: Incomplete classification, insufficient/unknown coverage, and LINKAGE_PENDING are visible and cannot be misrepresented as low risk or fully linked incidents.
+- UI-AC29: Every classification-backed aggregate shows exactly one API-provided taxonomy version and reports records without a qualifying completion for that version as unclassified; the UI never falls back to or combines another version.
 - UI-AC24: Overview and incident empty states use GET /readiness to distinguish detection activation, coverage, processing degradation, automatic-notification activation, manual-confirmation availability, and email-provider availability. UNKNOWN remains explicit and is never presented as ACTIVE, HEALTHY, or evidence of zero product defects; INACTIVE detection is never presented as zero defects; the UI never infers readiness or exposes configuration details.
 
 ### Flow B: Investigate and update an incident
@@ -437,16 +441,16 @@ The reviewed requirements align on Admin-only ingestion, server-side RBAC, backe
 
 The following items remain unresolved and constrain this UI:
 
-1. **Detection activation:** PB-01 thresholds/minimum counts and DAI-06 coverage scope/completeness/calibration remain pending. The selected authoritative completed classification attempt is also unresolved. DETECTION_SPEC v1.1 explicitly keeps automatic detection and automatic notifications disabled until the required policy and calibration are approved.
+1. **Detection activation:** PB-01 thresholds/minimum counts and DAI-06 coverage scope/completeness/calibration remain pending. PP-005's attempt-selection and explicit taxonomy-version applicability rules are approved. DETECTION_SPEC v1.1 keeps automatic detection and automatic notifications disabled until the remaining calibration/evaluation/provider/routing gates are resolved.
 2. **Metric definitions:** PB-05 leaves active warnings, critical warnings, and products at risk undefined. Render API null/PENDING_DEFINITION as pending, not as a number.
 3. **Alert behavior:** ALERT_SPEC v0.3 is Draft. Cooldown is fixed at 86,400 seconds per incident/severity across routes with escalation bypass, but timestamp anchor, same-severity re-crossing, treatment of failed/blocked sends, severity decreases, and recurrence/cooldown interaction remain pending. UI must not infer these edge rules.
 4. **Routing and provider:** Final recipient directory, routing precedence/group combination, fallback, route-key semantics, concrete sandbox/local capture provider, callbacks, and provider verification are open. Automatic and manual send controls must remain gated until the required approvals/configuration.
 5. **Manual preview lifecycle:** Preview-token persistence, expiry, replay, and session binding remain open. The UI consumes only the server token/hash and requires a fresh preview after content or recipient changes.
-6. **Retry and recovery:** PP-007 approves worker reconciliation every 60 seconds and eligible retry delays of 5/15/45 seconds. `max_attempts=3` applies only to PP-014-created classification work; other job-type budgets and provider-specific notification limits/error mapping remain under their owning decisions. The API design baseline exposes safe retry eligibility and ineligibility reason codes. `OUTCOME_UNKNOWN` is not automatically resent.
+6. **Retry and recovery:** PP-007 approves worker reconciliation every 60 seconds and eligible retry delays of 5/15/45 seconds. PP-014-created classification work has its own `max_attempts=3` cap. Each ingestion run also has 3 claims; Admin recovery starts a new audited run under the same job only for safely replayable work. Reconciliation and M3 historical detection have 3 claims per job type and retry only known-safe transient failures. BATCH_POLL remains unbudgeted; provider-specific notification limits and error mapping remain under their owning decisions. The API design baseline exposes safe retry eligibility and ineligibility reason codes. `OUTCOME_UNKNOWN` is not automatically resent.
 7. **Readiness contract:** ARC-08 approves the role-visible coarse readiness endpoint and its informational-only semantics. Exact degradation thresholds and provider-health assessment parameters remain pending for the operations specification; the API must return UNKNOWN until readiness can be established. INACTIVE detection is not zero defects. The endpoint does not expose Admin configuration or authorize actions, and this approval does not activate detection or notifications.
 8. **CSV mapping contract:** PRD §5.3 explicitly requires mapping. DAI-08 approves Admin mapping to required and optional targets, uniqueness, optional-source IGNORE, confirmation blocking for missing required targets, and immutable preview/hash binding. These semantics are captured in the approved conditional API and Data Model design baselines; dependent behavior remains subject to documented implementation prerequisites.
 9. **Filter consistency:** The warning list uses the API-supported subset allowed by PRD §6.2. The UI visibly marks category_code and source_type as unapplied to incident rows and carries only compatible filters into drill-downs.
-10. **Contract approval:** API_SPEC v1.5.2 and Data Model v1.5.2 are approved as conditional design baselines; API v1.5.1 and Data Model v1.5.1 were their previous approved versions. Remaining implementation and unrelated decision gates still apply.
+10. **Contract approval:** API_SPEC v1.5.4 and Data Model v1.5.5 are approved as conditional design baselines; API v1.5.3 and Data Model v1.5.4 were their previous approved versions. Remaining implementation and unrelated decision gates still apply.
 11. **Frontend choices:** Exact chart conventions and design tokens remain open; approved authentication/recovery behavior is defined in SECURITY.md and API_SPEC.yaml.
 12. **Upload contract:** The 20,000,000-byte file-part limit, 50,000 logical-row cap, encoding, timestamp, field-length, parser-version, and report behavior are approved and shown consistently with API_SPEC.yaml. Synthetic uploads, previews, row reasons, and rejection reports remain available through the capstone period without automatic per-artifact expiry; removal occurs through documented reset/reseed after backup and reference/audit checks under OPS-03.
 13. **Performance:** Dashboard p95 and post-classification display targets are targets to validate, not guarantees. The 30-second poll is not a processing SLA.

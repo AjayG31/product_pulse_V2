@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   Alert,
   Box,
@@ -44,6 +44,7 @@ type Preview = {
     duplicate_noop_rows: number;
     conflict_rows: number;
   };
+  rejection_report?: { available: boolean; href?: string | null; content_type?: string | null };
 };
 type ProcessingMode = "HISTORICAL_BATCH" | "INCREMENTAL_RESPONSES";
 type IngestionJob = {
@@ -51,6 +52,24 @@ type IngestionJob = {
   status: string;
   processing_mode: ProcessingMode;
   counts: { persisted_feedback: number };
+};
+type RetryEligibility = { eligible: boolean; reason_code: string };
+type AdminIngestionJob = {
+  job_id: string;
+  preview_id: string;
+  status: string;
+  processing_mode: ProcessingMode | null;
+  created_at: string;
+  counts: {
+    total_rows: number;
+    accepted_rows: number;
+    rejected_rows: number;
+    persisted_feedback: number;
+  };
+  retry_eligibility: RetryEligibility;
+  last_error_code?: string | null;
+  rejection_report?: { available: boolean; href?: string | null };
+  upload_kind?: UploadKind;
 };
 
 const TARGETS: Record<UploadKind, { required: string[]; optional: string[] }> = {
@@ -141,6 +160,14 @@ export function AdminIngestion() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [jobs, setJobs] = useState<AdminIngestionJob[]>([]);
+  const [jobsError, setJobsError] = useState("");
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsPage, setJobsPage] = useState(1);
+  const [jobsTotalPages, setJobsTotalPages] = useState(1);
+  const [retryingJobId, setRetryingJobId] = useState("");
+  const [jobMessage, setJobMessage] = useState("");
+  const retryKeys = useRef<Record<string, string>>({});
   const [page, setPage] = useState(1);
 
   const required = TARGETS[kind].required;
@@ -150,6 +177,87 @@ export function AdminIngestion() {
     return mappings.length === headers.length && required.every((target) => assigned.filter((value) => value === target).length === 1)
       && new Set(assigned).size === assigned.length && mappings.every(Boolean);
   }, [headers.length, mappings, required]);
+
+  async function loadJobs(requestedPage = jobsPage) {
+    setJobsLoading(true);
+    setJobsError("");
+    try {
+      const response = await fetch(`/admin/ingestion/jobs?page=${requestedPage}&page_size=50`, { credentials: "include" });
+      if (!response.ok) throw new Error(await safeProblem(response));
+      const result = (await response.json()) as {
+        items: AdminIngestionJob[];
+        page?: { page: number; total_pages: number };
+      };
+      const enriched = await Promise.all(result.items.map(async (job) => {
+        try {
+          const previewResponse = await fetch(`/admin/ingestion/previews/${encodeURIComponent(job.preview_id)}`, {
+            credentials: "include",
+          });
+          if (!previewResponse.ok) return job;
+          const preview = (await previewResponse.json()) as { upload_kind?: UploadKind };
+          return { ...job, upload_kind: preview.upload_kind };
+        } catch {
+          return job;
+        }
+      }));
+      setJobs(enriched);
+      setJobsPage(result.page?.page ?? requestedPage);
+      setJobsTotalPages(result.page?.total_pages ?? 1);
+    } catch (cause) {
+      setJobsError(cause instanceof Error ? cause.message : "Ingestion job status could not be loaded.");
+    } finally {
+      setJobsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadJobs();
+  }, [csrfToken]);
+
+  async function retryJob(jobId: string) {
+    if (!csrfToken) return;
+    const key = retryKeys.current[jobId] ?? crypto.randomUUID();
+    retryKeys.current[jobId] = key;
+    setRetryingJobId(jobId);
+    setJobMessage("");
+    try {
+      const response = await fetch(`/admin/ingestion/jobs/${encodeURIComponent(jobId)}/retry`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "X-CSRF-Token": csrfToken, "Idempotency-Key": key },
+      });
+      if (!response.ok) {
+        let message: string;
+        if (response.status === 409) {
+          try {
+            const problem = (await response.json()) as {
+              detail?: string;
+              retry_eligibility?: RetryEligibility;
+            };
+            message = problem.detail ?? "The recovery request is no longer eligible.";
+            if (problem.retry_eligibility?.reason_code) {
+              message = `${message} Current eligibility: ${problem.retry_eligibility.reason_code}.`;
+            }
+          } catch {
+            message = "The recovery request is no longer eligible.";
+          }
+          delete retryKeys.current[jobId];
+          await loadJobs();
+        } else {
+          message = await safeProblem(response);
+        }
+        throw new Error(message);
+      }
+      const result = (await response.json()) as { run: { background_job_id: string } };
+      delete retryKeys.current[jobId];
+      setJobMessage(`Recovery queued as run ${result.run.background_job_id}.`);
+      await loadJobs();
+    } catch (cause) {
+      setJobMessage(cause instanceof Error ? cause.message : "The recovery request could not be completed.");
+    } finally {
+      setRetryingJobId("");
+    }
+  }
 
   async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -256,6 +364,7 @@ export function AdminIngestion() {
       const job = (await response.json()) as IngestionJob;
       setConfirmedJob(job);
       setPreview({ ...preview, state: "CONFIRMED" });
+      await loadJobs(1);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The import could not be confirmed. Try again.");
     } finally {
@@ -264,6 +373,7 @@ export function AdminIngestion() {
   }
 
   return (
+    <>
     <Card variant="outlined" sx={{ mt: 3 }}>
       <CardContent>
         <Stack spacing={2}>
@@ -356,6 +466,11 @@ export function AdminIngestion() {
                 Rows: {preview.counts.total_rows}; accepted {preview.counts.accepted_rows}; rejected {preview.counts.rejected_rows};
                 duplicate no-op {preview.counts.duplicate_noop_rows}; conflicts {preview.counts.conflict_rows}
               </Typography>
+              {preview.rejection_report?.available && preview.rejection_report.href && (
+                <Button component="a" href={preview.rejection_report.href} download variant="outlined">
+                  Download rejection report
+                </Button>
+              )}
               <Table size="small" aria-label="Preview row outcomes">
                 <TableHead><TableRow><TableCell>Row</TableCell><TableCell>Status</TableCell><TableCell>Source identity</TableCell><TableCell>Reason</TableCell></TableRow></TableHead>
                 <TableBody>
@@ -405,5 +520,67 @@ export function AdminIngestion() {
         </Stack>
       </CardContent>
     </Card>
+    <Card variant="outlined" sx={{ mt: 3 }}>
+      <CardContent>
+        <Stack spacing={2}>
+          <Typography component="h2" variant="h5">Ingestion job status</Typography>
+          <Typography color="text.secondary">Review import status and retry eligibility. Recovery is available only when the server confirms safe replay.</Typography>
+          <Button variant="outlined" onClick={() => void loadJobs()} disabled={jobsLoading} sx={{ alignSelf: "flex-start" }}>
+            {jobsLoading ? "Refreshing jobs…" : "Refresh jobs"}
+          </Button>
+          {jobsError && <Alert role="alert" severity="error">{jobsError}</Alert>}
+          {jobMessage && <Alert role="status" severity={jobMessage.startsWith("Recovery queued") ? "success" : "info"}>{jobMessage}</Alert>}
+          <Table size="small" aria-label="Ingestion job status">
+            <TableHead>
+              <TableRow>
+                <TableCell>Job</TableCell><TableCell>Upload kind</TableCell><TableCell>Mode</TableCell>
+                <TableCell>Status</TableCell><TableCell>Rows</TableCell><TableCell>Created</TableCell><TableCell>Error code</TableCell>
+                <TableCell>Retry eligibility</TableCell><TableCell>Action</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {jobs.map((job) => (
+                <TableRow key={job.job_id}>
+                  <TableCell>
+                    <a href={`/admin/ingestion/previews/${encodeURIComponent(job.preview_id)}`}>{job.job_id}</a>
+                    {job.rejection_report?.available && job.rejection_report.href && (
+                      <Button component="a" size="small" href={job.rejection_report.href} download>Report</Button>
+                    )}
+                  </TableCell>
+                  <TableCell>{job.upload_kind ?? "—"}</TableCell>
+                  <TableCell>{job.processing_mode ?? "—"}</TableCell>
+                  <TableCell>{job.status}</TableCell>
+                  <TableCell>{job.counts.persisted_feedback}/{job.counts.total_rows}</TableCell>
+                  <TableCell>{job.created_at}</TableCell>
+                  <TableCell>{job.last_error_code ?? "—"}</TableCell>
+                  <TableCell>{job.retry_eligibility.reason_code}</TableCell>
+                  <TableCell>
+                    {job.retry_eligibility.eligible && (
+                      <Button
+                        size="small"
+                        onClick={() => void retryJob(job.job_id)}
+                        disabled={retryingJobId === job.job_id}
+                      >
+                        {retryingJobId === job.job_id ? "Retrying…" : "Retry"}
+                      </Button>
+                    )}
+                    {!job.retry_eligibility.eligible && "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {jobs.length === 0 && !jobsLoading && (
+                <TableRow><TableCell colSpan={9}>No ingestion jobs found.</TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+          <Stack direction="row" spacing={1}>
+            <Button onClick={() => void loadJobs(jobsPage - 1)} disabled={jobsPage <= 1 || jobsLoading}>Previous jobs</Button>
+            <Typography sx={{ alignSelf: "center" }}>Page {jobsPage} of {jobsTotalPages}</Typography>
+            <Button onClick={() => void loadJobs(jobsPage + 1)} disabled={jobsPage >= jobsTotalPages || jobsLoading}>Next jobs</Button>
+          </Stack>
+        </Stack>
+      </CardContent>
+    </Card>
+    </>
   );
 }

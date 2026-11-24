@@ -7,6 +7,7 @@ import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy import column, func, insert, select, table, text, tuple_
 from sqlalchemy.exc import IntegrityError
@@ -22,10 +23,12 @@ from productpulse.api_schemas import (
     UploadPreviewResponse,
     UploadPreviewRowPage,
     UploadPreviewRowResponse,
+    RejectionReportLink,
 )
 from productpulse.auth_api import AuthContext, _check_session_csrf, get_admin_context
 from productpulse.db_session import get_db
-from productpulse.ingestion.artifacts import ArtifactStore, StagedUpload
+from productpulse.ingestion.artifacts import ArtifactIntegrityError, ArtifactStore, StagedUpload
+from productpulse.ingestion.rejection_reports import RejectionReportRow, rejection_report_chunks
 from productpulse.ingestion.parser import (
     MAX_FILE_BYTES,
     CsvInputError,
@@ -33,7 +36,8 @@ from productpulse.ingestion.parser import (
     parse_preview,
     template_bytes,
 )
-from productpulse.models import CsvUpload, UploadPreview, UploadPreviewRow
+from productpulse.ingestion.reference_imports import persist_conflict_rows, reclassify_reference_preview
+from productpulse.models import CsvUpload, RejectionReportArtifact, UploadPreview, UploadPreviewRow
 from productpulse.security.sessions import utc_text
 from productpulse.settings import get_settings
 
@@ -132,6 +136,8 @@ async def _parse_form(request: Request) -> FormData:
 
 def _parse_with_stored_conflicts(db: Session, artifact_path, kind: str, mappings: list[dict[str, object]]) -> PreviewParse:
     parsed = parse_preview(artifact_path, kind, mappings)
+    if kind in {"PRODUCT_REFERENCE", "SUPPLIER_REFERENCE", "BATCH_REFERENCE"}:
+        return reclassify_reference_preview(db, kind, parsed)
     candidates = sorted({
         (row.source_type, row.source_record_id)
         for row in parsed.rows
@@ -154,7 +160,11 @@ def _parse_with_stored_conflicts(db: Session, artifact_path, kind: str, mappings
     return parse_preview(artifact_path, kind, mappings, stored)
 
 
-def _preview_response(preview: UploadPreview, upload: CsvUpload) -> UploadPreviewResponse:
+def _preview_response(
+    preview: UploadPreview,
+    upload: CsvUpload,
+    report: RejectionReportArtifact | None,
+) -> UploadPreviewResponse:
     return UploadPreviewResponse(
         preview_id=preview.preview_id,
         upload_id=upload.upload_id,
@@ -172,6 +182,11 @@ def _preview_response(preview: UploadPreview, upload: CsvUpload) -> UploadPrevie
             duplicate_noop_rows=preview.duplicate_row_count,
             conflict_rows=preview.conflict_row_count,
         ),
+        rejection_report=RejectionReportLink(
+            available=report is not None,
+            href=f"/admin/ingestion/previews/{preview.preview_id}/rejection-report" if report else None,
+            content_type="text/csv" if report else None,
+        ),
         uploaded_by=upload.uploaded_by,
         created_at=preview.created_at,
         confirmed_by=preview.confirmed_by,
@@ -186,10 +201,89 @@ def _missing_preview() -> ApiError:
 def _is_artifact_referenced(db: Session, artifact_id: str) -> bool | None:
     try:
         db.rollback()
-        return db.scalar(select(CsvUpload.upload_id).where(CsvUpload.artifact_id == artifact_id)) is not None
+        upload_reference = db.scalar(select(CsvUpload.upload_id).where(CsvUpload.artifact_id == artifact_id))
+        report_reference = db.scalar(
+            select(RejectionReportArtifact.artifact_id).where(RejectionReportArtifact.artifact_id == artifact_id)
+        )
+        return upload_reference is not None or report_reference is not None
     except Exception:
         db.rollback()
         return None
+
+
+def _cleanup_unreferenced_artifacts(db: Session, store: ArtifactStore, artifact_ids: list[str]) -> None:
+    if db.in_transaction():
+        db.rollback()
+    for artifact_id in artifact_ids:
+        if _is_artifact_referenced(db, artifact_id) is False:
+            store.remove_published(artifact_id)
+
+
+def _stored_report_rows(db: Session, preview_id: str) -> list[RejectionReportRow]:
+    persisted = db.scalars(
+        select(UploadPreviewRow)
+        .where(UploadPreviewRow.preview_id == preview_id)
+        .order_by(UploadPreviewRow.row_number)
+    ).all()
+    return [
+        RejectionReportRow(
+            row_number=row.row_number,
+            row_status=row.row_status,
+            source_type=row.source_type,
+            source_record_id=row.source_record_id,
+            rejection_codes=json.loads(row.rejection_codes_text) if row.rejection_codes_text else (),
+            rejection_detail=row.rejection_detail,
+        )
+        for row in persisted
+    ]
+
+
+def _new_artifact_id(db: Session) -> str:
+    while True:
+        artifact_id = f"art_{uuid.uuid4().hex}"
+        upload = db.scalar(select(CsvUpload.upload_id).where(CsvUpload.artifact_id == artifact_id))
+        report = db.scalar(
+            select(RejectionReportArtifact.artifact_id).where(RejectionReportArtifact.artifact_id == artifact_id)
+        )
+        if upload is None and report is None:
+            return artifact_id
+
+
+def _ensure_rejection_report(
+    db: Session,
+    preview: UploadPreview,
+    store: ArtifactStore,
+    generated_by: str,
+    published_artifact_ids: list[str],
+) -> RejectionReportArtifact | None:
+    if preview.rejected_row_count + preview.conflict_row_count == 0:
+        return None
+    existing = db.scalar(
+        select(RejectionReportArtifact).where(RejectionReportArtifact.preview_id == preview.preview_id)
+    )
+    if existing is not None:
+        return existing
+
+    rows = _stored_report_rows(db, preview.preview_id)
+    expected = preview.rejected_row_count + preview.conflict_row_count
+    actual = sum(row.row_status in {"REJECTED", "CONFLICT"} for row in rows)
+    if actual != expected:
+        raise ApiError(503, "PREVIEW_UNAVAILABLE", "The saved preview is temporarily unavailable.", "Request failed")
+
+    artifact_id = _new_artifact_id(db)
+    _path, digest, size = store.publish_chunks(artifact_id, rejection_report_chunks(rows))
+    published_artifact_ids.append(artifact_id)
+    report = RejectionReportArtifact(
+        artifact_id=artifact_id,
+        preview_id=preview.preview_id,
+        file_sha256=digest,
+        file_size_bytes=size,
+        generated_by=generated_by,
+        created_at=utc_text(),
+    )
+    db.add(report)
+    db.flush()
+    return report
 
 
 @router.get("/admin/ingestion/templates/{upload_kind}")
@@ -231,7 +325,7 @@ async def create_ingestion_preview(
     key = validate_idempotency_key(idempotency_key)
     form = await _parse_form(request)
     staged: StagedUpload | None = None
-    published_artifact_id: str | None = None
+    published_artifact_ids: list[str] = []
     store = ArtifactStore(context.request.app.state.settings or get_settings())
     try:
         kind, mappings, upload_file = _json_mapping(form)
@@ -250,6 +344,7 @@ async def create_ingestion_preview(
         fingerprint = _request_fingerprint(kind, staged.sha256, canonical_mappings)
         db.execute(text("BEGIN IMMEDIATE"))
         referenced_ids = set(db.scalars(select(CsvUpload.artifact_id)).all())
+        referenced_ids.update(db.scalars(select(RejectionReportArtifact.artifact_id)).all())
         store.reconcile_unreferenced(referenced_ids)
         previous = db.scalar(
             select(UploadPreview).where(UploadPreview.preview_idempotency_key == key)
@@ -267,16 +362,27 @@ async def create_ingestion_preview(
                     "The Idempotency-Key was already used for a different preview request.",
                     "Conflict",
                 )
+            report = _ensure_rejection_report(db, previous, store, context.user.user_id, published_artifact_ids)
             db.commit()
+            published_artifact_ids.clear()
             response.status_code = 200
-            return _preview_response(previous, upload)
+            return _preview_response(previous, upload, report)
+
+        # Re-evaluate database-backed reference mappings under the SQLite writer lock.
+        # The saved preview reflects this same snapshot and confirmation checks it again.
+        if kind in {"PRODUCT_REFERENCE", "SUPPLIER_REFERENCE", "BATCH_REFERENCE"}:
+            parsed = reclassify_reference_preview(
+                db,
+                kind,
+                parse_preview(staged.temporary_path, kind, mappings),
+            )
 
         upload_id = f"upl_{uuid.uuid4().hex}"
         preview_id = f"prv_{uuid.uuid4().hex}"
-        artifact_id = f"art_{uuid.uuid4().hex}"
+        artifact_id = _new_artifact_id(db)
         created_at = utc_text()
         store.publish(staged, artifact_id)
-        published_artifact_id = artifact_id
+        published_artifact_ids.append(artifact_id)
         upload = CsvUpload(
             upload_id=upload_id,
             upload_kind=kind,
@@ -327,30 +433,38 @@ async def create_ingestion_preview(
                     for row in parsed.rows
                 ],
             )
+        persist_conflict_rows(db, preview_id, kind, parsed.rows, created_at)
+        db.flush()
+        report = _ensure_rejection_report(db, preview, store, context.user.user_id, published_artifact_ids)
         db.commit()
-        published_artifact_id = None
-        return _preview_response(preview, upload)
+        published_artifact_ids.clear()
+        return _preview_response(preview, upload, report)
     except CsvInputError as error:
         if db.in_transaction():
             db.rollback()
+        _cleanup_unreferenced_artifacts(db, store, published_artifact_ids)
         raise ApiError(error.status, error.code, error.detail, "Upload validation failed") from error
     except ApiError:
         if db.in_transaction():
             db.rollback()
+        _cleanup_unreferenced_artifacts(db, store, published_artifact_ids)
         raise
     except IntegrityError as error:
         if db.in_transaction():
             db.rollback()
-        if published_artifact_id and _is_artifact_referenced(db, published_artifact_id) is False:
-            store.remove_published(published_artifact_id)
-            published_artifact_id = None
+        _cleanup_unreferenced_artifacts(db, store, published_artifact_ids)
+        published_artifact_ids.clear()
         existing = db.scalar(select(UploadPreview).where(UploadPreview.preview_idempotency_key == key))
         if existing is not None:
             existing_upload = db.get(CsvUpload, existing.upload_id)
             if existing.preview_request_sha256 == fingerprint and existing_upload is not None:
+                retry_report = _ensure_rejection_report(
+                    db, existing, store, context.user.user_id, published_artifact_ids
+                )
                 db.commit()
+                published_artifact_ids.clear()
                 response.status_code = 200
-                return _preview_response(existing, existing_upload)
+                return _preview_response(existing, existing_upload, retry_report)
             db.rollback()
             raise ApiError(
                 409,
@@ -362,9 +476,7 @@ async def create_ingestion_preview(
     except Exception as error:
         if db.in_transaction():
             db.rollback()
-        if published_artifact_id and _is_artifact_referenced(db, published_artifact_id) is False:
-            store.remove_published(published_artifact_id)
-            published_artifact_id = None
+        _cleanup_unreferenced_artifacts(db, store, published_artifact_ids)
         _UPLOAD_LOG.error("event=PREVIEW_CREATE_FAILED request_id=%s", getattr(request.state, "request_id", "unknown"))
         raise ApiError(503, "PREVIEW_CREATE_FAILED", "The preview could not be saved. Try again.", "Request failed") from error
     finally:
@@ -384,7 +496,55 @@ def get_ingestion_preview(
     upload = context.db.get(CsvUpload, preview.upload_id)
     if upload is None:
         raise ApiError(503, "PREVIEW_UNAVAILABLE", "The saved preview is temporarily unavailable.", "Request failed")
-    return _preview_response(preview, upload)
+    report = context.db.scalar(
+        select(RejectionReportArtifact).where(RejectionReportArtifact.preview_id == preview_id)
+    )
+    return _preview_response(preview, upload, report)
+
+
+@router.get("/admin/ingestion/previews/{preview_id}/rejection-report")
+def download_rejection_report(
+    preview_id: str,
+    context: AuthContext = Depends(get_admin_context),
+) -> StreamingResponse:
+    db = context.db
+    preview = db.get(UploadPreview, preview_id)
+    if preview is None:
+        raise _missing_preview()
+    report = db.scalar(
+        select(RejectionReportArtifact).where(RejectionReportArtifact.preview_id == preview_id)
+    )
+    if report is None:
+        raise ApiError(404, "REJECTION_REPORT_NOT_FOUND", "The rejection report was not found.", "Not found")
+
+    store = ArtifactStore(context.request.app.state.settings or get_settings())
+    try:
+        artifact = store.open_verified(report.artifact_id, report.file_sha256)
+    except ArtifactIntegrityError as error:
+        raise ApiError(
+            503,
+            "REJECTION_REPORT_UNAVAILABLE",
+            "The rejection report is temporarily unavailable.",
+            "Request failed",
+        ) from error
+
+    def chunks():
+        try:
+            while block := artifact.read(64 * 1024):
+                yield block
+        finally:
+            artifact.close()
+
+    digest = report.file_sha256
+    return StreamingResponse(
+        chunks(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="rejection-report.csv"',
+            "ETag": f'"{digest}"',
+            "X-Content-SHA256": digest,
+        },
+    )
 
 
 @router.get("/admin/ingestion/previews/{preview_id}/rows", response_model=UploadPreviewRowPage)

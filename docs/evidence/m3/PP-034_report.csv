@@ -1,0 +1,4 @@
+row_number,outcome,source_type,source_record_id,reason_code,safe_explanation
+2,CONFLICT,REVIEW,'=2+2,SOURCE_PAYLOAD_CONFLICT,This identity has different content in the same file.
+3,REJECTED,REVIEW,'+3+4,INVALID_TIMESTAMP,The timestamp must include Z or an explicit offset and use at most millisecond precision.
+4,REJECTED,REVIEW,"'@SUM(2,2)",INVALID_TIMESTAMP,The timestamp must include Z or an explicit offset and use at most millisecond precision.
