@@ -53,7 +53,7 @@ The final backend command was `.tools/bin/uv.exe run --locked pytest -q`: **108 
 - Approved parameter values and source identities remain unchanged. Classifier/API-key execution, detection activation, incident mutation, and notification delivery were not added. Migrations were exercised on isolated test databases only; no application database was migrated.
 - No approved requirement/specification changes or scope expansions occurred. One sequencing deviation is recorded below. No consequential external action was taken.
 
-**Sequencing deviation:** The execution register and retained evidence timestamps indicate PP-034 was recorded complete before PP-018, contrary to the Product Owner's requested order PP-018 → PP-034. PP-034 had independent completed prerequisites and passed its own readiness/acceptance gates, but it was completed early; PP-035, PP-015, and PP-036 proceeded only after their dependencies passed. No separate approval for this order variance is recorded. The deviation did not change ticket scope or results.
+**Sequencing deviation:** The execution register and retained evidence timestamps indicate PP-034 was recorded complete before PP-018, contrary to the Product Owner's requested order PP-018 → PP-034. PP-034 had independent completed prerequisites and passed its own readiness/acceptance gates, but it was completed early; PP-035, PP-015, and PP-036 proceeded only after their dependencies passed. On 24 November 2026, the Product Owner retrospectively accepted this documented sequencing deviation because PP-034 had independent prerequisites and passed its acceptance checks. This acceptance does not waive any required tests, change approved dependencies, or authorize future execution-order deviations. The deviation did not change ticket scope or results.
 
 ## 6. Remaining risks and limitations
 
@@ -65,6 +65,6 @@ The final backend command was `.tools/bin/uv.exe run --locked pytest -q`: **108 
 
 ## 7. Recommended next milestone
 
-Refresh PP-048's readiness before proposing the next milestone. It is the planned Admin conflict-review UI that now depends on the completed PP-036 API, but its ticket still says “Not Implementation Ready” and “blocked by mapping contract.” Confirm whether the completed backend contract closes that gate, then prepare a bounded approval for PP-048 only if all its requirements and dependencies pass. Keep classifier/detection work gated on the pending taxonomy/model decisions and PP-033.
+Fresh readiness review (24 November 2026): PP-048 is Implementation Ready for a future bounded milestone. PP-001, PP-010, PP-012, and PP-036 are Done with retained evidence; PP-036's evidence confirms the approved mapping/conflict contract and closes the ticket's stale “blocked by mapping contract” note. This readiness finding does not authorize M4. A proposed M4 scope and dependency-correct order must receive separate explicit Product Owner approval before implementation. Keep classifier/detection work gated on the pending taxonomy/model decisions and PP-033.
 
 No commit, push, merge, deployment, GitHub Actions, Playwright, OpenAI call, API key, or external email was used.
