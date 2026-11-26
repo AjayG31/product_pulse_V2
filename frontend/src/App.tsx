@@ -18,7 +18,9 @@ import {
 import { BrowserRouter } from "react-router";
 
 import { AuthProvider, useAuth } from "./auth";
+import { AdminConflictReview } from "./conflicts";
 import { AdminIngestion } from "./ingestion";
+import { AdminUserManagement } from "./users";
 
 const theme = createTheme({
   palette: {
@@ -206,6 +208,7 @@ function ForcedPasswordChangePage() {
 function FoundationPage() {
   const { user, signOut } = useAuth();
   const [error, setError] = useState("");
+  const [adminPanel, setAdminPanel] = useState<"ingestion" | "conflicts" | "users">("ingestion");
 
   async function logout() {
     try {
@@ -234,7 +237,34 @@ function FoundationPage() {
             </Typography>
           </CardContent>
         </Card>
-        {user?.role === "ADMIN" && <AdminIngestion />}
+        {user?.role === "ADMIN" && (
+          <Stack spacing={2}>
+            <Stack direction="row" spacing={1}>
+              <Button
+                variant={adminPanel === "ingestion" ? "contained" : "outlined"}
+                aria-pressed={adminPanel === "ingestion"}
+                onClick={() => setAdminPanel("ingestion")}
+              >
+                Ingestion
+              </Button>
+              <Button
+                variant={adminPanel === "conflicts" ? "contained" : "outlined"}
+                aria-pressed={adminPanel === "conflicts"}
+                onClick={() => setAdminPanel("conflicts")}
+              >
+                Conflict review
+              </Button>
+              <Button
+                variant={adminPanel === "users" ? "contained" : "outlined"}
+                aria-pressed={adminPanel === "users"}
+                onClick={() => setAdminPanel("users")}
+              >
+                Users
+              </Button>
+            </Stack>
+            {adminPanel === "ingestion" ? <AdminIngestion /> : adminPanel === "conflicts" ? <AdminConflictReview /> : <AdminUserManagement />}
+          </Stack>
+        )}
       </Container>
     </PageFrame>
   );

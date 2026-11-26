@@ -1,0 +1,24 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261125144036
+Username: COURSE5\Roshni.Luthria
+RunAs User: COURSE5\Roshni.Luthria
+Configuration Name: 
+Machine: SZML135 (Microsoft Windows NT 10.0.26300.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Ticket PP-029 -EvidencePath docs/evidence/m4/PP-029.txt
+Process ID: 29780
+PSVersion: 5.1.26100.10068
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.10068
+BuildVersion: 10.0.26100.10068
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+uv: uv 0.13.9 (6b2d39dcc 2026-11-17 x86_64-pc-windows-msvc)
+Node.js: 24.19.0
+npm: 11.20.0
+Python: Python 3.12.16
+
+===== PP-029 focused authentication and Admin-boundary pytest =====

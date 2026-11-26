@@ -12,7 +12,15 @@ from productpulse.main import create_app
 from productpulse.models import AuditEvent, Base, SessionRecord, User
 from productpulse.security.identity import normalize_email
 from productpulse.security.passwords import hash_password, validate_password, verify_password
-from productpulse.security.sessions import PRELOGIN_CSRF_COOKIE, SESSION_COOKIE, bearer_hash, utc_now, utc_text
+from productpulse.security.sessions import (
+    PRELOGIN_CSRF_COOKIE,
+    SESSION_COOKIE,
+    bearer_hash,
+    parse_utc,
+    session_cookie_lifetime,
+    utc_now,
+    utc_text,
+)
 from productpulse.settings import Settings
 
 
@@ -213,8 +221,39 @@ def test_every_admin_user_route_denies_direct_unauthenticated_and_business_reque
         assert db.scalar(select(func.count()).select_from(User)) == 2
         target = db.get(User, target_id)
         assert target is not None and target.status == "ACTIVE" and target.must_change_password is False
+        assert verify_password("Original user passphrase 2026!", target.password_hash)
         events = db.scalars(select(AuditEvent).where(AuditEvent.action == "AUTHORIZATION_DENIED")).all()
         assert len(events) == len(routes)
+        protected_actions = {"ACCOUNT_CREATED", "ACCOUNT_DEACTIVATED", "PASSWORD_RESET", "SESSION_REVOKED"}
+        assert not protected_actions.intersection(db.scalars(select(AuditEvent.action)).all())
+
+
+def test_invalid_csrf_blocks_user_mutations_without_protected_side_effects(auth_app):
+    app, engine = auth_app
+    add_user(engine)
+    target_id = add_user(engine, "target@example.test", "BUSINESS_USER", "Original user passphrase 2026!")
+    requests = [
+        ("POST", "/admin/users", {"email": "new@example.test", "role": "BUSINESS_USER", "initial_password": "New temporary phrase 2026!"}, None),
+        ("PATCH", f"/admin/users/{target_id}", {}, "invalid-token"),
+        ("POST", f"/admin/users/{target_id}/password-reset", {"temporary_password": "Reset temporary phrase 2026!"}, "invalid-token"),
+    ]
+    with TestClient(app, base_url="https://testserver") as client:
+        assert sign_in(client).status_code == 200
+        for method, path, body, csrf in requests:
+            headers = {"Idempotency-Key": f"invalid-csrf-{method}-{path.rsplit('/', 1)[-1]}"}
+            if csrf is not None:
+                headers["X-CSRF-Token"] = csrf
+            denied = client.request(method, path, headers=headers, json=body)
+            assert denied.status_code == 403
+            assert denied.json()["code"] == "CSRF_INVALID"
+
+    with Session(engine) as db:
+        target = db.get(User, target_id)
+        assert target is not None and target.status == "ACTIVE" and target.must_change_password is False
+        assert verify_password("Original user passphrase 2026!", target.password_hash)
+        assert db.scalar(select(func.count()).select_from(User)) == 2
+        actions = set(db.scalars(select(AuditEvent.action)).all())
+        assert not {"ACCOUNT_CREATED", "ACCOUNT_DEACTIVATED", "PASSWORD_RESET", "SESSION_REVOKED"}.intersection(actions)
 
 
 def test_first_admin_hidden_prompt_and_one_time_provisioning(monkeypatch, tmp_path, capsys):
@@ -233,7 +272,9 @@ def test_first_admin_hidden_prompt_and_one_time_provisioning(monkeypatch, tmp_pa
 
     monkeypatch.setattr(bootstrap_admin.getpass, "getpass", hidden_prompt)
     assert bootstrap_admin.main() == 0
-    assert "First Admin provisioned." in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "First Admin provisioned." in output
+    assert "First Admin phrase 2026!" not in output
     assert hidden_prompts == ["Initial Admin password: ", "Confirm initial Admin password: "]
     with Session(engine) as db:
         admin = db.scalar(select(User).where(User.role == "ADMIN"))
@@ -289,6 +330,10 @@ def test_admin_user_create_idempotency_and_password_change_gate(auth_app):
         assert signed.status_code == 200
         assert signed.json()["user"]["must_change_password"] is True
         old_bearer = business_client.cookies.get(SESSION_COOKIE)
+        assert business_client.get("/auth/session").status_code == 200
+        blocked = business_client.get("/products")
+        assert blocked.status_code == 403
+        assert blocked.json()["code"] == "PASSWORD_CHANGE_REQUIRED"
         assert business_client.get("/admin/users").status_code == 403
         changed = business_client.post(
             "/auth/password-change",
@@ -328,6 +373,15 @@ def test_admin_reset_and_deactivation_revoke_target_sessions(auth_app):
             assert reset.status_code == 200
             assert reset.json()["must_change_password"] is True
             assert temporary not in reset.text and "password_hash" not in reset.text
+            with Session(engine) as db:
+                reset_user = db.get(User, target_id)
+                assert reset_user is not None and verify_password(temporary, reset_user.password_hash)
+                assert temporary not in reset_user.password_hash
+                audit_text = " ".join(
+                    (event.before_state_text or "") + (event.after_state_text or "")
+                    for event in db.scalars(select(AuditEvent)).all()
+                )
+                assert temporary not in audit_text and "password_hash" not in audit_text
             assert target_client.get("/auth/session").status_code == 401
             with Session(engine) as db:
                 old_session = db.scalar(select(SessionRecord).where(SessionRecord.token_hash == bearer_hash(old_bearer)))
@@ -373,6 +427,43 @@ def test_session_idle_expiry_and_validation_error_redaction(auth_app):
         assert invalid.status_code == 422
         assert "sensitive submitted value" not in invalid.text
         assert "input" not in invalid.text.lower()
+
+
+def test_session_absolute_expiry_and_cookie_deadline(auth_app):
+    app, engine = auth_app
+    add_user(engine)
+    with TestClient(app, base_url="https://testserver") as client:
+        signed = sign_in(client)
+        assert signed.status_code == 200
+        bearer = client.cookies.get(SESSION_COOKIE)
+        now = utc_now()
+        with Session(engine) as db:
+            record = db.scalar(select(SessionRecord).where(SessionRecord.token_hash == bearer_hash(bearer)))
+            assert record is not None
+            record.last_seen_at = utc_text(now)
+            record.expires_at = utc_text(now + timedelta(minutes=10))
+            db.commit()
+            expected_deadline = parse_utc(record.expires_at)
+            max_age, cookie_deadline = session_cookie_lifetime(record, now=now)
+            assert cookie_deadline == expected_deadline
+            assert 0 < max_age <= 600
+
+        refreshed = client.get("/auth/session")
+        assert refreshed.status_code == 200
+        refreshed_cookie = refreshed.headers.get("set-cookie", "").lower()
+        assert SESSION_COOKIE.lower() in refreshed_cookie and "max-age=" in refreshed_cookie
+        cookie_max_age = int(refreshed_cookie.split("max-age=", 1)[1].split(";", 1)[0])
+        assert 0 < cookie_max_age <= 600
+
+        with Session(engine) as db:
+            record = db.scalar(select(SessionRecord).where(SessionRecord.token_hash == bearer_hash(bearer)))
+            assert record is not None
+            record.last_seen_at = utc_text(utc_now())
+            record.expires_at = utc_text(utc_now() - timedelta(seconds=1))
+            db.commit()
+        expired = client.get("/auth/session")
+        assert expired.status_code == 401
+        assert expired.json()["code"] == "SESSION_EXPIRED"
 
 
 def test_login_throttle_uses_hashed_local_keys_and_account_cooldown():

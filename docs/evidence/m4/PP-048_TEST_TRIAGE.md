@@ -1,0 +1,9 @@
+# PP-048 verification triage
+
+- Initial command: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Ticket PP-048 -EvidencePath docs/evidence/m4/PP-048.txt`.
+- The existing PP-036 API regression passed (**5 passed**, one existing Starlette/httpx deprecation warning).
+- The first targeted UI run executed 4 tests: 1 passed and 3 failed. Two tests queried `role=alert` while the screen intentionally showed both the informational linkage boundary and the result/error alert; the loading-state test observed the loading status before the deferred empty response completed. The run also surfaced a Material UI warning because the new test used a deprecated `inputProps` prop.
+- These were test query/async synchronization issues and a component API warning. No security or authorization defect was identified. The tests now select the specific message text, wait for queue completion, and the text field uses the current `slotProps.htmlInput` API.
+- The second run passed 3 of 4 targeted tests and exposed one remaining test-only ambiguity: the permission-error state correctly renders both an error alert and a stale-queue warning, while the test selected a single `role=alert`. The test now selects the specific permission message.
+- Code review also found that a failed details refresh after a stale 409 left decision controls available beside stale details. The UI now suppresses all resolution controls when detail refresh has failed or is stale, and a regression test covers that path. This was an in-scope fail-safe UI correction; the existing API remains the authorization and conflict-state enforcement boundary.
+- Final `scripts/check.ps1 -Ticket PP-048 -EvidencePath docs/evidence/m4/PP-048.txt` passed: API 5/5; targeted UI 5/5; full UI 9/9; frontend type-check/build passed; `npm audit` found 0 vulnerabilities. Warnings: one existing Starlette/httpx deprecation warning and Vite's >500 kB bundle advisory.
