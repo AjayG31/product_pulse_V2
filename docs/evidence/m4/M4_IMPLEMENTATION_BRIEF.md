@@ -1,15 +1,15 @@
 # ProductPulse M4 implementation brief
 
-**Milestone:** M4 — Admin security verification and management workflows  
-**Prepared:** 25 November 2026  
+**Milestone:** M4 — Admin security verification and management workflows<br>
+**Prepared:** 25 November 2026<br>
 **Authorization:** Product Owner explicitly approved PP-029, PP-048, and PP-037 in this order on 25 November 2026. Approval covers their implementation/verification, focused tests, minimal backwards-compatible local check-runner support, and M4 evidence. It does not authorize other tickets, production changes, live AI/provider calls, deployment, commits, pushes, or merges.
 
 ## 1. Active source and baseline
 
-- Active checkout: `D:\Roshni_Luthria_OneDrive\OneDrive - C5i\Desktop\capstone project - ajay`.
-- Branch: `dev-roshni`; starting Git revision: `b287b97a52e14c6bc4525e65bcb54b1bde74303a`.
-- The working tree was clean at preparation. The attached chat handoff was used as context only; its former “M4 not approved” statement is superseded by the current explicit milestone approval.
-- M3 closure and its PP-036 API acceptance evidence are present in `M3_COMPLETION_REPORT.md` and `PP-036.txt`. The current ticket files record PP-029, PP-048, and PP-037 as Implementation Ready (reviewed 24 November 2026), each with complete dependencies. The Implementation Plan ticket table still has older “blocked by” wording for PP-029/PP-048, and Architecture §5 still cites API_SPEC 1.5.3. These are stale status/version notes: the dependencies are Done in retained M1/M2/M3 evidence, the current Decision Register is v2.3, and the current API_SPEC is v1.5.4. They do not change the approved contracts or block the tickets.
+- Preparation checkout (25 November 2026): `D:\Roshni_Luthria_OneDrive\OneDrive - C5i\Desktop\capstone project - ajay`.
+- Preparation branch and starting Git revision: `dev-roshni` at `b287b97a52e14c6bc4525e65bcb54b1bde74303a`.
+- The working tree was clean at preparation. The attached chat handoff was used as context only; its former “M4 not approved” statement was superseded by the explicit milestone approval recorded here.
+- M3 closure and its PP-036 API acceptance evidence are present in `M3_COMPLETION_REPORT.md` and `PP-036.txt`. At M4 preparation, PP-029, PP-048, and PP-037 were Implementation Ready (reviewed 24 November 2026), with their dependencies complete. The preparation snapshot also identified stale M3/M4 status wording in the Implementation Plan and an Architecture §5 reference to API_SPEC 1.5.3. On 26 November, the Implementation Plan status rows were reconciled with M3/M4 completion evidence; M4 Product Owner acceptance remains pending. Architecture §5 remains unchanged because it is outside this evidence/status cleanup; API_SPEC v1.5.4 remains the current API contract. These historical notes do not amend approved specifications.
 
 ## 2. Governing requirements and specifications
 
